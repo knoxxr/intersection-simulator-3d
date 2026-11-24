@@ -86,25 +86,44 @@ func _make_box(bg: Color, border: Color, radius: int, pad_x: int, pad_y: int) ->
 	return sb
 
 var _syncing_layout: bool = false
+var _force_mode: int = 0 # 0 = auto, 1 = force mobile, 2 = force desktop
+var _startup_resync_done: bool = false
+var _startup_timer: float = 0.0
 
 func _on_viewport_resized() -> void:
 	if _syncing_layout:
 		return
 	call_deferred("_sync_scale_and_layout", false)
 
-func _get_device_scale() -> float:
+func _get_web_viewport_info() -> Dictionary:
+	var info := {
+		"dpr": clampf(DisplayServer.screen_get_scale(), 1.0, 3.0),
+		"css_w": 0.0,
+		"css_h": 0.0,
+		"is_touch": OS.has_feature("mobile")
+	}
 	if OS.has_feature("web"):
-		var raw: Variant = JavaScriptBridge.eval("window.devicePixelRatio || 1")
-		if raw != null:
-			return clampf(float(raw), 1.0, 3.5)
-		return 1.0
-	return clampf(DisplayServer.screen_get_scale(), 1.0, 3.0)
+		var dpr_v: Variant = JavaScriptBridge.eval("window.devicePixelRatio || 1")
+		var w_v: Variant = JavaScriptBridge.eval("window.innerWidth || 0")
+		var h_v: Variant = JavaScriptBridge.eval("window.innerHeight || 0")
+		var touch_v: Variant = JavaScriptBridge.eval("(('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia('(pointer: coarse)').matches) ? 1 : 0")
+		if dpr_v != null:
+			info["dpr"] = clampf(float(dpr_v), 1.0, 3.5)
+		if w_v != null:
+			info["css_w"] = float(w_v)
+		if h_v != null:
+			info["css_h"] = float(h_v)
+		if touch_v != null:
+			info["is_touch"] = int(touch_v) == 1
+	return info
 
 func _sync_scale_and_layout(force_rebuild: bool) -> void:
 	if sim == null or _syncing_layout:
 		return
 	_syncing_layout = true
-	var scale_factor := _get_device_scale()
+
+	var web_info := _get_web_viewport_info()
+	var scale_factor: float = web_info["dpr"]
 	var root_win := get_tree().root
 	if root_win != null and absf(root_win.content_scale_factor - scale_factor) > 0.05:
 		root_win.content_scale_factor = scale_factor
@@ -113,8 +132,16 @@ func _sync_scale_and_layout(force_rebuild: bool) -> void:
 	if phys_size.x <= 1.0 or phys_size.y <= 1.0:
 		phys_size = Vector2(1280, 720)
 	var logical_size := phys_size / scale_factor
+	if web_info["css_w"] > 10.0 and web_info["css_h"] > 10.0:
+		logical_size = Vector2(web_info["css_w"], web_info["css_h"])
+
 	var portrait := logical_size.y > logical_size.x
-	var want_mobile := (logical_size.x < 860.0) or (logical_size.y < 520.0) or portrait
+	var is_touch: bool = web_info["is_touch"]
+	var want_mobile := (logical_size.x < 900.0) or (logical_size.y < 540.0) or portrait or is_touch
+	if _force_mode == 1:
+		want_mobile = true
+	elif _force_mode == 2:
+		want_mobile = false
 
 	sim.orbit_camera.set_portrait_mode(portrait)
 
@@ -132,9 +159,18 @@ func _sync_scale_and_layout(force_rebuild: bool) -> void:
 		panel_container.anchor_top = 0.50 if portrait else 0.34
 	_syncing_layout = false
 
+func _toggle_ui_layout_mode() -> void:
+	_force_mode = 2 if _is_mobile else 1
+	_sync_scale_and_layout(true)
+
 func _process(delta: float) -> void:
 	if sim == null:
 		return
+	if not _startup_resync_done:
+		_startup_timer += delta
+		if _startup_timer >= 0.35:
+			_startup_resync_done = true
+			_sync_scale_and_layout(false)
 	_ui_refresh_timer += delta
 	if _ui_refresh_timer >= 0.15:
 		_ui_refresh_timer = 0.0
@@ -369,7 +405,7 @@ func _on_cycle_camera() -> void:
 func _build_desktop_ui() -> void:
 	_clear_ui()
 
-	# 1. Left Toggle Button
+	# 1. Left Toggle Button + Quick Mobile UI Switch Button
 	toggle_panel_btn = Button.new()
 	toggle_panel_btn.text = "◀ 패널 접기"
 	toggle_panel_btn.position = Vector2(14, 12)
@@ -377,6 +413,14 @@ func _build_desktop_ui() -> void:
 	_style_button(toggle_panel_btn, false, 32, 13)
 	toggle_panel_btn.pressed.connect(_on_toggle_desktop_panel)
 	add_child(toggle_panel_btn)
+
+	var mode_btn := Button.new()
+	mode_btn.text = "모바일 UI"
+	mode_btn.position = Vector2(138, 12)
+	mode_btn.size = Vector2(96, 32)
+	_style_button(mode_btn, false, 32, 13)
+	mode_btn.pressed.connect(_toggle_ui_layout_mode)
+	add_child(mode_btn)
 
 	# 2. Left Control Panel (Scrollable)
 	panel_container = PanelContainer.new()
@@ -564,6 +608,12 @@ func _populate_sim_camera_controls(parent: VBoxContainer, touch: bool) -> void:
 	cam_row.add_child(cam_low)
 
 	if touch:
+		var pc_btn := Button.new()
+		pc_btn.text = "데스크톱(PC) UI로 전환"
+		_style_button(pc_btn, false, btn_h, fsz)
+		pc_btn.pressed.connect(_toggle_ui_layout_mode)
+		parent.add_child(pc_btn)
+
 		var tip := Label.new()
 		tip.text = "팁: 한 손가락 드래그(회전) · 두 손가락 핀치(확대/축소)"
 		tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
