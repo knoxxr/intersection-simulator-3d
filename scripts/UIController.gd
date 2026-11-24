@@ -457,11 +457,12 @@ func _on_toggle_mobile_drawer() -> void:
 		floating_controls.visible = not _drawer_open
 
 func _on_cycle_camera() -> void:
-	_camera_preset_idx = (_camera_preset_idx + 1) % 3
+	_camera_preset_idx = (_camera_preset_idx + 1) % 4
 	match _camera_preset_idx:
 		0: sim.orbit_camera.set_preset_iso()
-		1: sim.orbit_camera.set_preset_top()
-		2: sim.orbit_camera.set_preset_street()
+		1: sim.orbit_camera.set_preset_wide()
+		2: sim.orbit_camera.set_preset_top()
+		3: sim.orbit_camera.set_preset_street()
 
 # ==============================================================================
 # DESKTOP / WIDE LANDSCAPE UI
@@ -733,6 +734,13 @@ func _populate_sim_camera_controls(parent: VBoxContainer, touch: bool) -> void:
 	_style_button(cam_iso, false, btn_h, fsz)
 	cam_iso.pressed.connect(func(): sim.orbit_camera.set_preset_iso())
 	cam_row.add_child(cam_iso)
+
+	var cam_wide := Button.new()
+	cam_wide.text = Lang.t("cam_wide")
+	cam_wide.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(cam_wide, false, btn_h, fsz)
+	cam_wide.pressed.connect(func(): sim.orbit_camera.set_preset_wide())
+	cam_row.add_child(cam_wide)
 
 	var cam_top := Button.new()
 	cam_top.text = Lang.t("cam_top")

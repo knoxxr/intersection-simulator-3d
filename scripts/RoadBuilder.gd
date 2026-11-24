@@ -96,7 +96,7 @@ func _setup_lighting_and_sky() -> void:
 	sun_light.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 	sun_light.shadow_bias = 0.12
 	sun_light.shadow_normal_bias = 1.8
-	sun_light.directional_shadow_max_distance = 90.0
+	sun_light.directional_shadow_max_distance = 180.0
 	add_child(sun_light)
 
 	world_env_node = WorldEnvironment.new()
@@ -178,8 +178,8 @@ func rebuild(ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_e
 	var ew_arm_len: float = ROAD_HALF_LEN - ns_half
 	var ew_arm_center: float = ns_half + ew_arm_len * 0.5
 
-	# 1. Ground base plane cleanly 0.25m below road surface (zero Z-fighting)
-	_add_box(Vector3(170, 0.4, 170), Vector3(0, -0.45, 0), grass_mat, false)
+	# 1. Ground base plane cleanly 0.25m below road surface (large enough for wide/far camera zoom)
+	_add_box(Vector3(360, 0.4, 360), Vector3(0, -0.45, 0), grass_mat, false)
 
 	# 2. Non-overlapping Road Geometry (all tops cleanly at y = 0.0)
 	_add_box(Vector3(ns_width, 0.20, ew_width), Vector3(0, -0.10, 0), intersection_mat, false)
