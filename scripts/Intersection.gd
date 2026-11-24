@@ -15,6 +15,9 @@ var elapsed_sim_time: float = 0.0
 var total_passed: int = 0
 var total_wait_accum: float = 0.0
 var recent_pass_timestamps: Array[float] = []
+var _sample_accum: float = 0.0
+
+signal metrics_sampled(waiting_cnt: float, throughput_pm: float)
 
 func _ready() -> void:
 	randomize()
@@ -27,12 +30,25 @@ func _physics_process(delta: float) -> void:
 		return
 	var dt := delta * sim_speed
 	elapsed_sim_time += dt
+
+	# Feed real-time queue & emergency vehicle telemetry to TrafficController & RoadBuilder
+	var dir_waits := spawner.get_waiting_counts_by_dir()
+	var emerg_app := spawner.get_active_emergency_approach()
+	traffic_ctrl.set_live_inputs(dir_waits, emerg_app)
+	road_builder.update_congestion(dir_waits)
+
 	traffic_ctrl.step_simulation(dt)
 	spawner.step_simulation(dt, traffic_ctrl)
 
-	# Trim rolling 60s throughput window
 	while not recent_pass_timestamps.is_empty() and (elapsed_sim_time - recent_pass_timestamps[0]) > 60.0:
 		recent_pass_timestamps.pop_front()
+
+	# Push graph sample every 1.0 simulated second
+	_sample_accum += dt
+	if _sample_accum >= 1.0:
+		_sample_accum = 0.0
+		var m := get_metrics()
+		metrics_sampled.emit(float(m["waiting"]), float(m["throughput"]))
 
 func _on_vehicle_passed(wait_time: float) -> void:
 	total_passed += 1
@@ -40,15 +56,25 @@ func _on_vehicle_passed(wait_time: float) -> void:
 	recent_pass_timestamps.append(elapsed_sim_time)
 
 func _rebuild_world() -> void:
-	road_builder.rebuild(spawner.lane_count, spawner.lane_enabled, spawner.approach_enabled)
-	traffic_ctrl.reposition_lights(spawner.lane_count * RoadBuilder.LANE_WIDTH)
+	road_builder.rebuild(spawner.ns_lanes, spawner.ew_lanes, spawner.lane_enabled, spawner.approach_enabled)
+	traffic_ctrl.reposition_lights(
+		spawner.ns_lanes * RoadBuilder.LANE_WIDTH,
+		spawner.ew_lanes * RoadBuilder.LANE_WIDTH
+	)
 
 # Public API invoked in real-time by UIController
-func set_lane_count(count: int) -> void:
+func set_ns_lanes(count: int) -> void:
 	var c := clampi(count, 1, 3)
-	if spawner.lane_count == c:
+	if spawner.ns_lanes == c:
 		return
-	spawner.lane_count = c
+	spawner.ns_lanes = c
+	_rebuild_world()
+
+func set_ew_lanes(count: int) -> void:
+	var c := clampi(count, 1, 3)
+	if spawner.ew_lanes == c:
+		return
+	spawner.ew_lanes = c
 	_rebuild_world()
 
 func set_lane_enabled(lane_idx: int, enabled: bool) -> void:
@@ -61,11 +87,69 @@ func set_approach_enabled(approach_idx: int, enabled: bool) -> void:
 		spawner.approach_enabled[approach_idx] = enabled
 		_rebuild_world()
 
+func set_time_of_day(mode: RoadBuilder.TimeOfDay) -> void:
+	road_builder.set_time_of_day(mode)
+
+func set_congestion_overlay(enabled: bool) -> void:
+	road_builder.congestion_overlay_enabled = enabled
+	road_builder.update_congestion(spawner.get_waiting_counts_by_dir())
+
+func dispatch_ambulance() -> void:
+	spawner.spawn_ambulance(-1)
+
+func apply_preset(preset_id: String) -> void:
+	match preset_id:
+		"normal":
+			spawner.ns_lanes = 2
+			spawner.ew_lanes = 2
+			spawner.lane_enabled = [true, true, true]
+			spawner.approach_enabled = [true, true, true, true]
+			spawner.global_traffic_rate = 1.0
+			spawner.dir_traffic_mult = [1.0, 1.0, 1.0, 1.0]
+			spawner.left_turn_ratio = 0.22
+			spawner.right_turn_ratio = 0.20
+			traffic_ctrl.ns_green_duration = 8.0
+			traffic_ctrl.ew_green_duration = 8.0
+			traffic_ctrl.set_mode(TrafficController.SignalMode.TWO_PHASE)
+		"rush_hour":
+			spawner.ns_lanes = 3
+			spawner.ew_lanes = 2
+			spawner.lane_enabled = [true, true, true]
+			spawner.approach_enabled = [true, true, true, true]
+			spawner.global_traffic_rate = 1.8
+			spawner.dir_traffic_mult = [1.9, 1.8, 0.7, 0.7]
+			spawner.left_turn_ratio = 0.20
+			spawner.right_turn_ratio = 0.18
+			traffic_ctrl.set_mode(TrafficController.SignalMode.SMART_ADAPTIVE)
+		"left_jam":
+			spawner.ns_lanes = 3
+			spawner.ew_lanes = 3
+			spawner.lane_enabled = [true, true, true]
+			spawner.approach_enabled = [true, true, true, true]
+			spawner.global_traffic_rate = 1.5
+			spawner.dir_traffic_mult = [1.2, 1.2, 1.1, 1.1]
+			spawner.left_turn_ratio = 0.46
+			spawner.right_turn_ratio = 0.14
+			traffic_ctrl.left_green_duration = 6.5
+			traffic_ctrl.set_mode(TrafficController.SignalMode.FOUR_PHASE)
+		"construction":
+			spawner.ns_lanes = 3
+			spawner.ew_lanes = 2
+			spawner.lane_enabled = [false, true, true] # Close inner lane with cones!
+			spawner.approach_enabled = [true, true, true, true]
+			spawner.global_traffic_rate = 1.5
+			spawner.dir_traffic_mult = [1.4, 1.3, 1.0, 1.0]
+			spawner.left_turn_ratio = 0.18
+			spawner.right_turn_ratio = 0.22
+			traffic_ctrl.set_mode(TrafficController.SignalMode.SMART_ADAPTIVE)
+	_rebuild_world()
+
 func reset_simulation() -> void:
 	spawner.clear_all_vehicles()
 	total_passed = 0
 	total_wait_accum = 0.0
 	elapsed_sim_time = 0.0
+	_sample_accum = 0.0
 	recent_pass_timestamps.clear()
 
 func get_metrics() -> Dictionary:
@@ -84,5 +168,6 @@ func get_metrics() -> Dictionary:
 		"avg_wait": avg_wait,
 		"throughput": throughput_per_min,
 		"phase": traffic_ctrl.get_phase_label(),
-		"phase_time": traffic_ctrl.get_time_remaining()
+		"phase_time": traffic_ctrl.get_time_remaining(),
+		"emergency": traffic_ctrl.is_emergency_active()
 	}

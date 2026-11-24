@@ -1,7 +1,7 @@
 extends Node3D
 class_name SimVehicle
 
-enum VehicleKind { SEDAN, SUV, TRUCK, TAXI }
+enum VehicleKind { SEDAN, SUV, TRUCK, TAXI, AMBULANCE }
 
 # Static shared materials (eliminates per-vehicle material allocation & WebGL2 shader recompilation flicker)
 static var _mats_ready: bool = false
@@ -10,6 +10,11 @@ static var _wheel_mat: StandardMaterial3D
 static var _head_mat: StandardMaterial3D
 static var _cargo_mat: StandardMaterial3D
 static var _taxi_sign_mat: StandardMaterial3D
+static var _amb_stripe_mat: StandardMaterial3D
+static var _siren_red_on: StandardMaterial3D
+static var _siren_red_off: StandardMaterial3D
+static var _siren_blue_on: StandardMaterial3D
+static var _siren_blue_off: StandardMaterial3D
 static var _brake_off_mat: StandardMaterial3D
 static var _brake_on_mat: StandardMaterial3D
 static var _turn_off_mat: StandardMaterial3D
@@ -34,7 +39,7 @@ static func _ensure_shared_mats() -> void:
 	_head_mat.albedo_color = Color(1.0, 0.97, 0.85)
 	_head_mat.emission_enabled = true
 	_head_mat.emission = Color(1.0, 0.96, 0.82)
-	_head_mat.emission_energy_multiplier = 1.4
+	_head_mat.emission_energy_multiplier = 1.6
 
 	_cargo_mat = StandardMaterial3D.new()
 	_cargo_mat.albedo_color = Color(0.90, 0.91, 0.93)
@@ -44,35 +49,31 @@ static func _ensure_shared_mats() -> void:
 	_taxi_sign_mat.albedo_color = Color(1.0, 0.92, 0.20)
 	_taxi_sign_mat.emission_enabled = true
 	_taxi_sign_mat.emission = Color(1.0, 0.85, 0.15)
-	_taxi_sign_mat.emission_energy_multiplier = 1.2
+	_taxi_sign_mat.emission_energy_multiplier = 1.3
 
-	_brake_off_mat = StandardMaterial3D.new()
-	_brake_off_mat.albedo_color = Color(0.45, 0.05, 0.05)
-	_brake_off_mat.roughness = 0.30
-	_brake_off_mat.emission_enabled = true
-	_brake_off_mat.emission = Color.BLACK
-	_brake_off_mat.emission_energy_multiplier = 0.0
+	_amb_stripe_mat = StandardMaterial3D.new()
+	_amb_stripe_mat.albedo_color = Color(0.92, 0.12, 0.12)
+	_amb_stripe_mat.roughness = 0.35
 
-	_brake_on_mat = StandardMaterial3D.new()
-	_brake_on_mat.albedo_color = Color(1.0, 0.10, 0.08)
-	_brake_on_mat.roughness = 0.25
-	_brake_on_mat.emission_enabled = true
-	_brake_on_mat.emission = Color(1.0, 0.12, 0.08)
-	_brake_on_mat.emission_energy_multiplier = 2.0
+	_siren_red_on = _make_emissive_mat(Color(1.0, 0.12, 0.12), Color(1.0, 0.10, 0.10), 3.0)
+	_siren_red_off = _make_emissive_mat(Color(0.32, 0.05, 0.05), Color.BLACK, 0.0)
+	_siren_blue_on = _make_emissive_mat(Color(0.12, 0.45, 1.0), Color(0.10, 0.48, 1.0), 3.0)
+	_siren_blue_off = _make_emissive_mat(Color(0.05, 0.12, 0.32), Color.BLACK, 0.0)
 
-	_turn_off_mat = StandardMaterial3D.new()
-	_turn_off_mat.albedo_color = Color(0.35, 0.22, 0.02)
-	_turn_off_mat.roughness = 0.30
-	_turn_off_mat.emission_enabled = true
-	_turn_off_mat.emission = Color.BLACK
-	_turn_off_mat.emission_energy_multiplier = 0.0
+	_brake_off_mat = _make_emissive_mat(Color(0.45, 0.05, 0.05), Color.BLACK, 0.0)
+	_brake_on_mat = _make_emissive_mat(Color(1.0, 0.10, 0.08), Color(1.0, 0.12, 0.08), 2.0)
 
-	_turn_on_mat = StandardMaterial3D.new()
-	_turn_on_mat.albedo_color = Color(1.0, 0.68, 0.05)
-	_turn_on_mat.roughness = 0.25
-	_turn_on_mat.emission_enabled = true
-	_turn_on_mat.emission = Color(1.0, 0.65, 0.05)
-	_turn_on_mat.emission_energy_multiplier = 2.0
+	_turn_off_mat = _make_emissive_mat(Color(0.35, 0.22, 0.02), Color.BLACK, 0.0)
+	_turn_on_mat = _make_emissive_mat(Color(1.0, 0.68, 0.05), Color(1.0, 0.65, 0.05), 2.0)
+
+static func _make_emissive_mat(albedo: Color, em: Color, energy: float) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = albedo
+	m.roughness = 0.28
+	m.emission_enabled = true
+	m.emission = em
+	m.emission_energy_multiplier = energy
+	return m
 
 static func _get_body_mat(col: Color) -> StandardMaterial3D:
 	var key := col.to_rgba32()
@@ -89,6 +90,7 @@ var approach_idx: int = 0       # 0=N, 1=S, 2=E, 3=W
 var lane_idx: int = 0
 var turn_type: int = 0          # TrafficController.TurnType
 var kind: VehicleKind = VehicleKind.SEDAN
+var is_emergency: bool = false
 
 var path_points: PackedVector3Array = PackedVector3Array()
 var path_cum_dist: PackedFloat32Array = PackedFloat32Array()
@@ -111,8 +113,11 @@ var finished: bool = false
 
 var _brake_meshes: Array[MeshInstance3D] = []
 var _turn_meshes: Array[MeshInstance3D] = []
+var _siren_red_mesh: MeshInstance3D
+var _siren_blue_mesh: MeshInstance3D
 var _brake_lit: bool = false
 var _turn_lit: bool = false
+var _siren_phase: bool = false
 var _blink_accum: float = 0.0
 
 func setup(
@@ -133,6 +138,7 @@ func setup(
 	stop_progress = p_stop_prog
 	exit_box_progress = p_exit_prog
 	kind = p_kind
+	is_emergency = (kind == VehicleKind.AMBULANCE)
 
 	match kind:
 		VehicleKind.SEDAN:
@@ -151,8 +157,13 @@ func setup(
 			vehicle_length = 4.3
 			max_speed = randf_range(12.2, 14.5)
 			max_accel = 4.8
+		VehicleKind.AMBULANCE:
+			vehicle_length = 5.2
+			max_speed = 16.8
+			max_accel = 5.8
+			comfort_decel = 7.0
 
-	speed = max_speed * 0.75
+	speed = max_speed * 0.80
 	_bake_path()
 	_build_mesh(p_color)
 	_apply_transform_at(0.0)
@@ -212,19 +223,29 @@ func _build_mesh(body_color: Color) -> void:
 
 	if kind == VehicleKind.TRUCK:
 		w = 2.15
-		# Front cab (-Z is front)
 		_add_part(Vector3(w * 0.94, 1.85, 1.8), Vector3(0, 1.25, -l * 0.5 + 0.95), body_mat)
-		# Windshield sits cleanly in front of cab (no Z-overlap)
 		_add_part(Vector3(w * 0.84, 0.72, 0.12), Vector3(0, 1.55, -l * 0.5 + 0.02), _glass_mat)
-		# Cargo trailer box (clean gap behind cab)
 		_add_part(Vector3(w, 2.35, l - 2.15), Vector3(0, 1.55, 0.98), _cargo_mat)
+	elif kind == VehicleKind.AMBULANCE:
+		w = 2.08
+		var amb_white := _get_body_mat(Color(0.96, 0.97, 0.99))
+		# Main van body
+		_add_part(Vector3(w, 1.55, l), Vector3(0, 1.12, 0), amb_white)
+		# Red emergency side/front trim stripe cleanly protruding outside van body
+		_add_part(Vector3(w + 0.08, 0.24, l * 0.72), Vector3(0, 0.95, 0.35), _amb_stripe_mat)
+		# Red cross on roof
+		_add_part(Vector3(0.95, 0.06, 0.28), Vector3(0, 1.94, 0.45), _amb_stripe_mat)
+		_add_part(Vector3(0.28, 0.06, 0.95), Vector3(0, 1.94, 0.45), _amb_stripe_mat)
+		# Front windshield
+		_add_part(Vector3(w * 0.86, 0.58, 0.10), Vector3(0, 1.48, -l * 0.5 - 0.02), _glass_mat)
+		# Flashing roof lightbar (Red left / Blue right)
+		_siren_red_mesh = _add_part(Vector3(0.55, 0.24, 0.32), Vector3(-0.34, 2.04, -l * 0.24), _siren_red_on)
+		_siren_blue_mesh = _add_part(Vector3(0.55, 0.24, 0.32), Vector3(0.34, 2.04, -l * 0.24), _siren_blue_off)
 	else:
 		if kind == VehicleKind.SUV:
 			w = 1.96
 			h = 0.82
-		# Lower chassis (bottom 0.34, top 0.34 + h)
 		_add_part(Vector3(w, h, l), Vector3(0, 0.34 + h * 0.5, 0), body_mat)
-		# Stacked non-overlapping glass cabin + roof cap (eliminates side/roof Z-fighting)
 		var cab_len := l * (0.60 if kind == VehicleKind.SUV else 0.48)
 		var glass_h := 0.48 if kind == VehicleKind.SUV else 0.42
 		var roof_h := 0.16
@@ -252,7 +273,7 @@ func _build_mesh(body_color: Color) -> void:
 			wh.position = Vector3(sx * wheel_x, 0.34, sz * wheel_z)
 			add_child(wh)
 
-	# Headlights (-Z front) & Brake lights (+Z rear), cleanly offset from bumper
+	# Headlights (-Z front) & Brake lights (+Z rear)
 	for sx in [-1.0, 1.0]:
 		_add_part(Vector3(0.32, 0.18, 0.08), Vector3(sx * (w * 0.34), 0.64, -l * 0.5 - 0.05), _head_mat)
 		var bm := _add_part(Vector3(0.36, 0.18, 0.08), Vector3(sx * (w * 0.34), 0.66, l * 0.5 + 0.05), _brake_off_mat)
@@ -283,7 +304,7 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, all_vehicles: A
 	var target_speed := max_speed
 	var inside_intersection := (progress >= stop_progress - 2.0 and progress <= exit_box_progress)
 	if inside_intersection and turn_type != TrafficController.TurnType.STRAIGHT:
-		target_speed = min(target_speed, 7.2)
+		target_speed = min(target_speed, 7.6)
 
 	var must_stop_dist := 9999.0
 
@@ -352,7 +373,6 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, all_vehicles: A
 		speed = min(desired_speed, speed + max_accel * delta)
 		braking = speed < 0.4
 
-	# Advance along path
 	progress += speed * delta
 	if not has_passed_intersection and progress >= exit_box_progress:
 		has_passed_intersection = true
@@ -399,9 +419,16 @@ func _update_lights(delta: float, braking: bool) -> void:
 		for mesh_node in _brake_meshes:
 			mesh_node.material_override = m
 
+	_blink_accum += delta
+	if is_emergency and _siren_red_mesh != null and _siren_blue_mesh != null:
+		var sp := fmod(_blink_accum, 0.36) < 0.18
+		if sp != _siren_phase:
+			_siren_phase = sp
+			_siren_red_mesh.material_override = _siren_red_on if sp else _siren_red_off
+			_siren_blue_mesh.material_override = _siren_blue_off if sp else _siren_blue_on
+
 	if turn_type != TrafficController.TurnType.STRAIGHT and not _turn_meshes.is_empty():
 		var near_turn := (progress > stop_progress - 18.0 and progress < exit_box_progress + 2.0)
-		_blink_accum += delta
 		var lit := near_turn and fmod(_blink_accum, 0.7) < 0.35
 		if lit != _turn_lit:
 			_turn_lit = lit

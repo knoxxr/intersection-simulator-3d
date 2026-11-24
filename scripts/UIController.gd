@@ -9,16 +9,28 @@ var _active_mobile_tab: int = 0
 var _camera_preset_idx: int = 0
 var _ui_refresh_timer: float = 0.0
 
-# References updated dynamically
+var _syncing_layout: bool = false
+var _force_mode: int = 0 # 0 = auto, 1 = force mobile, 2 = force desktop
+var _startup_resync_done: bool = false
+var _startup_timer: float = 0.0
+
+# Cached history so rebuilding UI on rotate/preset preserves graph history
+var _hist_wait: PackedFloat32Array = PackedFloat32Array()
+var _hist_tp: PackedFloat32Array = PackedFloat32Array()
+
+# Dynamic widget refs
 var panel_container: PanelContainer
 var toggle_panel_btn: Button
 var floating_controls: VBoxContainer
 var lane_checkboxes: Array[CheckBox] = []
-var lane_count_btns: Array[Button] = []
+var ns_lane_btns: Array[Button] = []
+var ew_lane_btns: Array[Button] = []
 var speed_btns: Array[Button] = []
+var time_btns: Array[Button] = []
 var pause_btn: Button
 var mobile_tab_btns: Array[Button] = []
 var mobile_tab_pages: Array[Control] = []
+var metrics_graph: MetricsGraph
 
 # Telemetry labels
 var lbl_phase: Label
@@ -31,14 +43,26 @@ var _style_sheet: StyleBoxFlat
 var _style_btn: StyleBoxFlat
 var _style_btn_hover: StyleBoxFlat
 var _style_btn_active: StyleBoxFlat
+var _style_btn_danger: StyleBoxFlat
 var _style_slider_bg: StyleBoxFlat
 var _style_slider_fill: StyleBoxFlat
 
 func bind_simulation(main_sim: IntersectionMain) -> void:
 	sim = main_sim
 	_init_styles()
+	sim.metrics_sampled.connect(_on_metrics_sampled)
 	get_viewport().size_changed.connect(_on_viewport_resized)
 	_sync_scale_and_layout(true)
+
+func _on_metrics_sampled(waiting_cnt: float, throughput_pm: float) -> void:
+	_hist_wait.append(waiting_cnt)
+	_hist_tp.append(throughput_pm)
+	if _hist_wait.size() > MetricsGraph.MAX_POINTS:
+		_hist_wait.remove_at(0)
+	if _hist_tp.size() > MetricsGraph.MAX_POINTS:
+		_hist_tp.remove_at(0)
+	if is_instance_valid(metrics_graph):
+		metrics_graph.push_sample(waiting_cnt, throughput_pm)
 
 func _init_styles() -> void:
 	var dark_bg := Color(0.07, 0.09, 0.13, 0.88)
@@ -57,9 +81,10 @@ func _init_styles() -> void:
 	_style_sheet.content_margin_top = 10
 	_style_sheet.content_margin_bottom = 12
 
-	_style_btn = _make_box(Color(0.15, 0.19, 0.26, 0.92), Color(0.32, 0.40, 0.52, 0.7), 8, 10, 6)
-	_style_btn_hover = _make_box(Color(0.21, 0.27, 0.36, 0.96), Color(0.45, 0.60, 0.80, 0.9), 8, 10, 6)
-	_style_btn_active = _make_box(Color(0.16, 0.48, 0.84, 0.98), Color(0.45, 0.78, 1.0, 1.0), 8, 10, 6)
+	_style_btn = _make_box(Color(0.15, 0.19, 0.26, 0.92), Color(0.32, 0.40, 0.52, 0.7), 8, 8, 6)
+	_style_btn_hover = _make_box(Color(0.21, 0.27, 0.36, 0.96), Color(0.45, 0.60, 0.80, 0.9), 8, 8, 6)
+	_style_btn_active = _make_box(Color(0.16, 0.48, 0.84, 0.98), Color(0.45, 0.78, 1.0, 1.0), 8, 8, 6)
+	_style_btn_danger = _make_box(Color(0.76, 0.18, 0.18, 0.96), Color(1.0, 0.45, 0.45, 0.95), 8, 8, 6)
 
 	_style_slider_bg = StyleBoxFlat.new()
 	_style_slider_bg.bg_color = Color(0.20, 0.24, 0.32, 0.95)
@@ -84,11 +109,6 @@ func _make_box(bg: Color, border: Color, radius: int, pad_x: int, pad_y: int) ->
 	sb.content_margin_top = pad_y
 	sb.content_margin_bottom = pad_y
 	return sb
-
-var _syncing_layout: bool = false
-var _force_mode: int = 0 # 0 = auto, 1 = force mobile, 2 = force desktop
-var _startup_resync_done: bool = false
-var _startup_timer: float = 0.0
 
 func _on_viewport_resized() -> void:
 	if _syncing_layout:
@@ -146,21 +166,36 @@ func _sync_scale_and_layout(force_rebuild: bool) -> void:
 	sim.orbit_camera.set_portrait_mode(portrait)
 
 	if force_rebuild or (not _ui_built) or (_is_mobile != want_mobile):
+		var keep_open := _drawer_open and _ui_built and (_is_mobile == want_mobile)
 		_is_mobile = want_mobile
 		_ui_built = true
 		if _is_mobile:
-			_drawer_open = false
+			_drawer_open = keep_open
 			_build_mobile_ui(portrait)
 		else:
-			_drawer_open = true
+			_drawer_open = true if not force_rebuild else _drawer_open
+			if not keep_open and not _drawer_open:
+				_drawer_open = true
 			_build_desktop_ui()
+		_restore_graph_history()
 		_refresh_metrics()
 	elif _is_mobile and panel_container != null:
-		panel_container.anchor_top = 0.50 if portrait else 0.34
+		panel_container.anchor_top = 0.48 if portrait else 0.34
 	_syncing_layout = false
+
+func _restore_graph_history() -> void:
+	if not is_instance_valid(metrics_graph):
+		return
+	metrics_graph.wait_history = _hist_wait.duplicate()
+	metrics_graph.throughput_history = _hist_tp.duplicate()
+	metrics_graph.queue_redraw()
 
 func _toggle_ui_layout_mode() -> void:
 	_force_mode = 2 if _is_mobile else 1
+	_sync_scale_and_layout(true)
+
+func _apply_preset_and_sync(preset_id: String) -> void:
+	sim.apply_preset(preset_id)
 	_sync_scale_and_layout(true)
 
 func _process(delta: float) -> void:
@@ -180,29 +215,37 @@ func _clear_ui() -> void:
 	for c in get_children():
 		c.queue_free()
 	lane_checkboxes.clear()
-	lane_count_btns.clear()
+	ns_lane_btns.clear()
+	ew_lane_btns.clear()
 	speed_btns.clear()
+	time_btns.clear()
 	mobile_tab_btns.clear()
 	mobile_tab_pages.clear()
 	panel_container = null
 	floating_controls = null
 	toggle_panel_btn = null
 	pause_btn = null
+	metrics_graph = null
 	lbl_phase = null
 	lbl_counts = null
 	lbl_perf = null
 
-func _style_button(btn: Button, active: bool = false, min_h: int = 34, font_sz: int = 13) -> void:
+func _style_button(btn: Button, active: bool = false, min_h: int = 34, font_sz: int = 13, danger: bool = false) -> void:
 	btn.custom_minimum_size.y = min_h
 	btn.add_theme_font_size_override("font_size", font_sz)
-	btn.add_theme_stylebox_override("normal", _style_btn_active if active else _style_btn)
-	btn.add_theme_stylebox_override("hover", _style_btn_active if active else _style_btn_hover)
-	btn.add_theme_stylebox_override("pressed", _style_btn_active)
+	if danger:
+		btn.add_theme_stylebox_override("normal", _style_btn_danger)
+		btn.add_theme_stylebox_override("hover", _style_btn_danger)
+		btn.add_theme_stylebox_override("pressed", _style_btn_danger)
+	else:
+		btn.add_theme_stylebox_override("normal", _style_btn_active if active else _style_btn)
+		btn.add_theme_stylebox_override("hover", _style_btn_active if active else _style_btn_hover)
+		btn.add_theme_stylebox_override("pressed", _style_btn_active)
 	btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	btn.add_theme_color_override("font_color", Color(0.95, 0.97, 1.0))
+	btn.add_theme_color_override("font_color", Color(0.96, 0.98, 1.0))
 
 # ==============================================================================
-# MOBILE / PORTRAIT UI (Compact Top Bar + Floating Camera Buttons + Bottom Sheet)
+# MOBILE / PORTRAIT UI (Compact Top Bar + Floating Quick Actions + Bottom Sheet)
 # ==============================================================================
 func _build_mobile_ui(portrait: bool = true) -> void:
 	_clear_ui()
@@ -223,7 +266,6 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	top_v.add_theme_constant_override("separation", 6)
 	top_bar.add_child(top_v)
 
-	# Row 1: Signal Status + Quick Pause + Settings Toggle
 	var row1 := HBoxContainer.new()
 	row1.add_theme_constant_override("separation", 6)
 	top_v.add_child(row1)
@@ -244,13 +286,12 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	row1.add_child(pause_btn)
 
 	toggle_panel_btn = Button.new()
-	toggle_panel_btn.text = "⚙ 설정"
+	toggle_panel_btn.text = "✕ 닫기" if _drawer_open else "⚙ 설정"
 	toggle_panel_btn.custom_minimum_size = Vector2(78, 34)
-	_style_button(toggle_panel_btn, false, 34, 14)
+	_style_button(toggle_panel_btn, _drawer_open, 34, 14)
 	toggle_panel_btn.pressed.connect(_on_toggle_mobile_drawer)
 	row1.add_child(toggle_panel_btn)
 
-	# Row 2: Compact Telemetry Metrics
 	lbl_counts = Label.new()
 	lbl_counts.text = "주행 0 | 대기 0 | 통과 0 (0/분) | 평균 0.0초"
 	lbl_counts.clip_text = true
@@ -258,7 +299,7 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	lbl_counts.add_theme_color_override("font_color", Color(0.88, 0.92, 0.96))
 	top_v.add_child(lbl_counts)
 
-	# 2. Floating Right Quick-Action Buttons (Zoom +/-, Camera, Next Signal)
+	# 2. Floating Right Quick-Action Buttons (Zoom +/-, Camera, Next Signal, Ambulance)
 	floating_controls = VBoxContainer.new()
 	floating_controls.anchor_left = 1.0
 	floating_controls.anchor_right = 1.0
@@ -266,10 +307,18 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	floating_controls.anchor_bottom = 1.0
 	floating_controls.offset_left = -58
 	floating_controls.offset_right = -10
-	floating_controls.offset_top = -222
+	floating_controls.offset_top = -274
 	floating_controls.offset_bottom = -16
 	floating_controls.add_theme_constant_override("separation", 8)
+	floating_controls.visible = not _drawer_open
 	add_child(floating_controls)
+
+	var amb_quick := Button.new()
+	amb_quick.text = "구급"
+	amb_quick.custom_minimum_size = Vector2(46, 44)
+	_style_button(amb_quick, false, 44, 12, true)
+	amb_quick.pressed.connect(func(): sim.dispatch_ambulance())
+	floating_controls.add_child(amb_quick)
 
 	var zoom_in_btn := Button.new()
 	zoom_in_btn.text = "+"
@@ -299,11 +348,11 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	next_sig_btn.pressed.connect(func(): sim.traffic_ctrl.force_next_phase())
 	floating_controls.add_child(next_sig_btn)
 
-	# 3. Bottom Sheet Control Drawer (Hidden by default so full 3D view is visible!)
+	# 3. Bottom Sheet Control Drawer
 	panel_container = PanelContainer.new()
 	panel_container.anchor_left = 0.0
 	panel_container.anchor_right = 1.0
-	panel_container.anchor_top = 0.50 if portrait else 0.34
+	panel_container.anchor_top = 0.48 if portrait else 0.34
 	panel_container.anchor_bottom = 1.0
 	panel_container.offset_left = 0
 	panel_container.offset_right = 0
@@ -322,21 +371,20 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 
 	# Category Tab Strip
 	var tab_bar := HBoxContainer.new()
-	tab_bar.add_theme_constant_override("separation", 6)
+	tab_bar.add_theme_constant_override("separation", 5)
 	sheet_v.add_child(tab_bar)
 
-	var tab_names := ["차선", "트래픽", "신호등", "제어"]
+	var tab_names := ["시나리오", "차선", "트래픽", "신호등", "제어"]
 	for t in range(tab_names.size()):
 		var tb := Button.new()
 		tb.text = tab_names[t]
 		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_style_button(tb, t == _active_mobile_tab, 40, 14)
+		_style_button(tb, t == _active_mobile_tab, 40, 13)
 		var tab_idx := t
 		tb.pressed.connect(func(): _select_mobile_tab(tab_idx))
 		tab_bar.add_child(tb)
 		mobile_tab_btns.append(tb)
 
-	# Scrollable Page Area
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -347,10 +395,15 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	pages_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(pages_host)
 
-	# Build 4 tab pages
+	var page_preset := VBoxContainer.new()
+	page_preset.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	page_preset.add_theme_constant_override("separation", 10)
+	_populate_scenario_controls(page_preset, true)
+	pages_host.add_child(page_preset)
+
 	var page_lanes := VBoxContainer.new()
 	page_lanes.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	page_lanes.add_theme_constant_override("separation", 12)
+	page_lanes.add_theme_constant_override("separation", 10)
 	_populate_lane_controls(page_lanes, true)
 	pages_host.add_child(page_lanes)
 
@@ -368,19 +421,20 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 
 	var page_sim := VBoxContainer.new()
 	page_sim.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	page_sim.add_theme_constant_override("separation", 12)
+	page_sim.add_theme_constant_override("separation", 10)
 	_populate_sim_camera_controls(page_sim, true)
+	_add_graph_block(page_sim)
 	pages_host.add_child(page_sim)
 
-	mobile_tab_pages = [page_lanes, page_traffic, page_signals, page_sim]
-	_select_mobile_tab(_active_mobile_tab)
+	mobile_tab_pages = [page_preset, page_lanes, page_traffic, page_signals, page_sim]
+	_select_mobile_tab(clampi(_active_mobile_tab, 0, mobile_tab_pages.size() - 1))
 
 func _select_mobile_tab(idx: int) -> void:
 	_active_mobile_tab = idx
 	for i in range(mobile_tab_pages.size()):
 		mobile_tab_pages[i].visible = (i == idx)
 	for i in range(mobile_tab_btns.size()):
-		_style_button(mobile_tab_btns[i], i == idx, 40, 14)
+		_style_button(mobile_tab_btns[i], i == idx, 40, 13)
 
 func _on_toggle_mobile_drawer() -> void:
 	_drawer_open = not _drawer_open
@@ -405,9 +459,9 @@ func _on_cycle_camera() -> void:
 func _build_desktop_ui() -> void:
 	_clear_ui()
 
-	# 1. Left Toggle Button + Quick Mobile UI Switch Button
+	# 1. Top-Left Bar: Panel Toggle + Mobile UI Switch
 	toggle_panel_btn = Button.new()
-	toggle_panel_btn.text = "◀ 패널 접기"
+	toggle_panel_btn.text = "◀ 패널 접기" if _drawer_open else "▶ 제어 패널"
 	toggle_panel_btn.position = Vector2(14, 12)
 	toggle_panel_btn.size = Vector2(116, 32)
 	_style_button(toggle_panel_btn, false, 32, 13)
@@ -425,10 +479,10 @@ func _build_desktop_ui() -> void:
 	# 2. Left Control Panel (Scrollable)
 	panel_container = PanelContainer.new()
 	panel_container.position = Vector2(14, 50)
-	panel_container.custom_minimum_size = Vector2(316, 0)
+	panel_container.custom_minimum_size = Vector2(326, 0)
 	panel_container.anchor_bottom = 1.0
 	panel_container.offset_bottom = -14
-	panel_container.offset_right = 330
+	panel_container.offset_right = 340
 	panel_container.mouse_filter = Control.MOUSE_FILTER_STOP
 	panel_container.add_theme_stylebox_override("panel", _style_panel)
 	panel_container.visible = _drawer_open
@@ -451,26 +505,29 @@ func _build_desktop_ui() -> void:
 	title.add_theme_color_override("font_color", Color(0.95, 0.98, 1.0))
 	vbox.add_child(title)
 
-	_add_section_header(vbox, "시뮬레이션 & 카메라")
+	_add_section_header(vbox, "시나리오 프리셋 & 긴급출동")
+	_populate_scenario_controls(vbox, false)
+
+	_add_section_header(vbox, "시뮬레이션 · 카메라 · 시간대")
 	_populate_sim_camera_controls(vbox, false)
 
-	_add_section_header(vbox, "차선 설정 (실시간 반영)")
+	_add_section_header(vbox, "차선 설정 (비대칭·실시간 반영)")
 	_populate_lane_controls(vbox, false)
 
 	_add_section_header(vbox, "트래픽 양 & 회전 비율")
 	_populate_traffic_controls(vbox, false)
 
-	_add_section_header(vbox, "신호등 제어 & 시나리오")
+	_add_section_header(vbox, "신호등 제어 & AI 감응")
 	_populate_signal_controls(vbox, false)
 
-	# 3. Top-Right Real-Time Telemetry HUD
+	# 3. Top-Right Real-Time Telemetry HUD + Live Trend Graph
 	var hud := PanelContainer.new()
 	hud.anchor_left = 1.0
 	hud.anchor_right = 1.0
-	hud.offset_left = -315
+	hud.offset_left = -324
 	hud.offset_right = -14
 	hud.offset_top = 12
-	hud.offset_bottom = 130
+	hud.offset_bottom = 228
 	hud.mouse_filter = Control.MOUSE_FILTER_STOP
 	hud.add_theme_stylebox_override("panel", _style_panel)
 	add_child(hud)
@@ -501,6 +558,8 @@ func _build_desktop_ui() -> void:
 	lbl_perf.add_theme_color_override("font_color", Color(0.84, 0.90, 0.96))
 	hud_v.add_child(lbl_perf)
 
+	_add_graph_block(hud_v)
+
 	# 4. Bottom-Right Controls Hint
 	var hint := PanelContainer.new()
 	hint.anchor_left = 1.0
@@ -521,6 +580,18 @@ func _build_desktop_ui() -> void:
 	hint_lbl.add_theme_color_override("font_color", Color(0.8, 0.86, 0.92))
 	hint.add_child(hint_lbl)
 
+func _add_graph_block(parent: VBoxContainer) -> void:
+	var leg := Label.new()
+	leg.text = "추이: 하늘(처리량/분) · 주황(대기차량)"
+	leg.add_theme_font_size_override("font_size", 11)
+	leg.add_theme_color_override("font_color", Color(0.74, 0.82, 0.90))
+	parent.add_child(leg)
+
+	metrics_graph = MetricsGraph.new()
+	metrics_graph.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	metrics_graph.custom_minimum_size = Vector2(240, 68)
+	parent.add_child(metrics_graph)
+
 func _on_toggle_desktop_panel() -> void:
 	_drawer_open = not _drawer_open
 	if panel_container:
@@ -529,11 +600,57 @@ func _on_toggle_desktop_panel() -> void:
 		toggle_panel_btn.text = "◀ 패널 접기" if _drawer_open else "▶ 제어 패널"
 
 # ==============================================================================
-# SHARED CONTROL BUILDERS (Responsive sizing for Mobile & Desktop)
+# SHARED CONTROL BUILDERS
 # ==============================================================================
+func _populate_scenario_controls(parent: VBoxContainer, touch: bool) -> void:
+	var btn_h := 42 if touch else 30
+	var fsz := 14 if touch else 12
+
+	var amb_btn := Button.new()
+	amb_btn.text = "🚑 구급차 긴급 출동 (우선신호)"
+	_style_button(amb_btn, false, btn_h + 2, fsz + 1, true)
+	amb_btn.pressed.connect(func(): sim.dispatch_ambulance())
+	parent.add_child(amb_btn)
+
+	var row1 := HBoxContainer.new()
+	row1.add_theme_constant_override("separation", 5)
+	parent.add_child(row1)
+
+	var p_norm := Button.new()
+	p_norm.text = "평시 균형"
+	p_norm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(p_norm, false, btn_h, fsz)
+	p_norm.pressed.connect(func(): _apply_preset_and_sync("normal"))
+	row1.add_child(p_norm)
+
+	var p_rush := Button.new()
+	p_rush.text = "출근 러시(AI)"
+	p_rush.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(p_rush, false, btn_h, fsz)
+	p_rush.pressed.connect(func(): _apply_preset_and_sync("rush_hour"))
+	row1.add_child(p_rush)
+
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", 5)
+	parent.add_child(row2)
+
+	var p_left := Button.new()
+	p_left.text = "좌회전 정체"
+	p_left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(p_left, false, btn_h, fsz)
+	p_left.pressed.connect(func(): _apply_preset_and_sync("left_jam"))
+	row2.add_child(p_left)
+
+	var p_const := Button.new()
+	p_const.text = "1차선 공사"
+	p_const.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(p_const, false, btn_h, fsz)
+	p_const.pressed.connect(func(): _apply_preset_and_sync("construction"))
+	row2.add_child(p_const)
+
 func _populate_sim_camera_controls(parent: VBoxContainer, touch: bool) -> void:
-	var btn_h := 42 if touch else 32
-	var fsz := 14 if touch else 13
+	var btn_h := 42 if touch else 30
+	var fsz := 14 if touch else 12
 
 	var sim_row := HBoxContainer.new()
 	sim_row.add_theme_constant_override("separation", 6)
@@ -556,7 +673,13 @@ func _populate_sim_camera_controls(parent: VBoxContainer, touch: bool) -> void:
 	reset_btn.text = "차량 초기화"
 	reset_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_button(reset_btn, false, btn_h, fsz)
-	reset_btn.pressed.connect(func(): sim.reset_simulation())
+	reset_btn.pressed.connect(func():
+		sim.reset_simulation()
+		_hist_wait.clear()
+		_hist_tp.clear()
+		if is_instance_valid(metrics_graph):
+			metrics_graph.clear_history()
+	)
 	sim_row.add_child(reset_btn)
 
 	var speed_row := HBoxContainer.new()
@@ -607,6 +730,40 @@ func _populate_sim_camera_controls(parent: VBoxContainer, touch: bool) -> void:
 	cam_low.pressed.connect(func(): sim.orbit_camera.set_preset_street())
 	cam_row.add_child(cam_low)
 
+	# Time-of-day lighting buttons (Day / Sunset / Night)
+	var tod_row := HBoxContainer.new()
+	tod_row.add_theme_constant_override("separation", 5)
+	parent.add_child(tod_row)
+	var tod_lbl := Label.new()
+	tod_lbl.text = "시간대:"
+	tod_lbl.add_theme_font_size_override("font_size", fsz)
+	tod_row.add_child(tod_lbl)
+
+	time_btns.clear()
+	var tod_labels := ["낮", "노을", "야간"]
+	var tod_modes := [RoadBuilder.TimeOfDay.DAY, RoadBuilder.TimeOfDay.SUNSET, RoadBuilder.TimeOfDay.NIGHT]
+	for i in range(3):
+		var tb := Button.new()
+		tb.text = tod_labels[i]
+		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var m_val: RoadBuilder.TimeOfDay = tod_modes[i]
+		_style_button(tb, sim.road_builder.time_of_day == m_val, btn_h, fsz)
+		tb.pressed.connect(func():
+			sim.set_time_of_day(m_val)
+			_refresh_time_button_styles(btn_h, fsz)
+		)
+		tod_row.add_child(tb)
+		time_btns.append(tb)
+
+	# Congestion curb overlay toggle
+	var cong_cb := CheckBox.new()
+	cong_cb.text = "도로 혼잡도 색상 표시 (초록/노랑/빨강)"
+	cong_cb.button_pressed = sim.road_builder.congestion_overlay_enabled
+	cong_cb.custom_minimum_size.y = 36 if touch else 24
+	cong_cb.add_theme_font_size_override("font_size", fsz)
+	cong_cb.toggled.connect(func(pressed: bool): sim.set_congestion_overlay(pressed))
+	parent.add_child(cong_cb)
+
 	if touch:
 		var pc_btn := Button.new()
 		pc_btn.text = "데스크톱(PC) UI로 전환"
@@ -626,33 +783,63 @@ func _refresh_speed_button_styles(btn_h: int, fsz: int) -> void:
 	for i in range(min(speed_btns.size(), speeds.size())):
 		_style_button(speed_btns[i], absf(sim.sim_speed - float(speeds[i])) < 0.05, btn_h, fsz)
 
+func _refresh_time_button_styles(btn_h: int, fsz: int) -> void:
+	var tod_modes := [RoadBuilder.TimeOfDay.DAY, RoadBuilder.TimeOfDay.SUNSET, RoadBuilder.TimeOfDay.NIGHT]
+	for i in range(min(time_btns.size(), tod_modes.size())):
+		_style_button(time_btns[i], sim.road_builder.time_of_day == tod_modes[i], btn_h, fsz)
+
 func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
-	var btn_h := 42 if touch else 32
-	var fsz := 14 if touch else 13
+	var btn_h := 42 if touch else 30
+	var fsz := 14 if touch else 12
 	var cb_fsz := 14 if touch else 12
 
-	var lane_cnt_row := HBoxContainer.new()
-	lane_cnt_row.add_theme_constant_override("separation", 6)
-	parent.add_child(lane_cnt_row)
-	var lc_lbl := Label.new()
-	lc_lbl.text = "편도 차선:"
-	lc_lbl.add_theme_font_size_override("font_size", fsz)
-	lane_cnt_row.add_child(lc_lbl)
+	# Asymmetric N-S lane count
+	var ns_row := HBoxContainer.new()
+	ns_row.add_theme_constant_override("separation", 5)
+	parent.add_child(ns_row)
+	var ns_lbl := Label.new()
+	ns_lbl.text = "남북 차선:"
+	ns_lbl.add_theme_font_size_override("font_size", fsz)
+	ns_row.add_child(ns_lbl)
 
-	lane_count_btns.clear()
+	ns_lane_btns.clear()
 	for cnt in [1, 2, 3]:
 		var cnt_val: int = int(cnt)
 		var lb := Button.new()
 		lb.text = "%d차선" % cnt_val
 		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_style_button(lb, sim.spawner.lane_count == cnt_val, btn_h, fsz)
+		_style_button(lb, sim.spawner.ns_lanes == cnt_val, btn_h, fsz)
 		lb.pressed.connect(func():
-			sim.set_lane_count(cnt_val)
-			_update_lane_checkbox_visibility(cnt_val)
+			sim.set_ns_lanes(cnt_val)
+			_update_lane_checkbox_visibility()
 			_refresh_lane_count_styles(btn_h, fsz)
 		)
-		lane_cnt_row.add_child(lb)
-		lane_count_btns.append(lb)
+		ns_row.add_child(lb)
+		ns_lane_btns.append(lb)
+
+	# Asymmetric E-W lane count
+	var ew_row := HBoxContainer.new()
+	ew_row.add_theme_constant_override("separation", 5)
+	parent.add_child(ew_row)
+	var ew_lbl := Label.new()
+	ew_lbl.text = "동서 차선:"
+	ew_lbl.add_theme_font_size_override("font_size", fsz)
+	ew_row.add_child(ew_lbl)
+
+	ew_lane_btns.clear()
+	for cnt in [1, 2, 3]:
+		var cnt_val: int = int(cnt)
+		var lb := Button.new()
+		lb.text = "%d차선" % cnt_val
+		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_style_button(lb, sim.spawner.ew_lanes == cnt_val, btn_h, fsz)
+		lb.pressed.connect(func():
+			sim.set_ew_lanes(cnt_val)
+			_update_lane_checkbox_visibility()
+			_refresh_lane_count_styles(btn_h, fsz)
+		)
+		ew_row.add_child(lb)
+		ew_lane_btns.append(lb)
 
 	var lane_open_lbl := Label.new()
 	lane_open_lbl.text = "개별 차선 개방 (해제 시 공사 라바콘 배치):"
@@ -676,7 +863,7 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 		cb.toggled.connect(func(pressed: bool): sim.set_lane_enabled(lane_i, pressed))
 		lane_open_row.add_child(cb)
 		lane_checkboxes.append(cb)
-	_update_lane_checkbox_visibility(sim.spawner.lane_count)
+	_update_lane_checkbox_visibility()
 
 	var dir_open_row := HBoxContainer.new()
 	dir_open_row.add_theme_constant_override("separation", 6)
@@ -698,8 +885,10 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 		dir_open_row.add_child(dcb)
 
 func _refresh_lane_count_styles(btn_h: int, fsz: int) -> void:
-	for i in range(lane_count_btns.size()):
-		_style_button(lane_count_btns[i], sim.spawner.lane_count == (i + 1), btn_h, fsz)
+	for i in range(ns_lane_btns.size()):
+		_style_button(ns_lane_btns[i], sim.spawner.ns_lanes == (i + 1), btn_h, fsz)
+	for i in range(ew_lane_btns.size()):
+		_style_button(ew_lane_btns[i], sim.spawner.ew_lanes == (i + 1), btn_h, fsz)
 
 func _populate_traffic_controls(parent: VBoxContainer, touch: bool) -> void:
 	_add_slider(parent, "전체 교통량", 0.0, 3.0, 0.1, sim.spawner.global_traffic_rate, "x", touch, func(val: float):
@@ -733,6 +922,7 @@ func _populate_signal_controls(parent: VBoxContainer, touch: bool) -> void:
 	mode_opt.add_theme_font_size_override("font_size", fsz)
 	mode_opt.add_item("2현시 (남북/동서 교대)", TrafficController.SignalMode.TWO_PHASE)
 	mode_opt.add_item("4현시 (좌회전 보호 신호)", TrafficController.SignalMode.FOUR_PHASE)
+	mode_opt.add_item("스마트 감응 (AI 대기열 자동 제어)", TrafficController.SignalMode.SMART_ADAPTIVE)
 	mode_opt.add_item("황색 점멸 (주의 서행)", TrafficController.SignalMode.FLASHING_YELLOW)
 	mode_opt.add_item("전체 적색 (정체 테스트)", TrafficController.SignalMode.ALL_RED)
 	var cur_idx := mode_opt.get_item_index(int(sim.traffic_ctrl.mode))
@@ -808,9 +998,10 @@ func _add_slider(parent: VBoxContainer, label_text: String, min_v: float, max_v:
 	)
 	row.add_child(sl)
 
-func _update_lane_checkbox_visibility(cnt: int) -> void:
+func _update_lane_checkbox_visibility() -> void:
+	var max_l := maxi(sim.spawner.ns_lanes, sim.spawner.ew_lanes)
 	for i in range(lane_checkboxes.size()):
-		lane_checkboxes[i].visible = (i < cnt)
+		lane_checkboxes[i].visible = (i < max_l)
 
 func _on_toggle_pause() -> void:
 	sim.paused = not sim.paused
@@ -820,7 +1011,7 @@ func _on_toggle_pause() -> void:
 			_style_button(pause_btn, sim.paused, 34, 15)
 		else:
 			pause_btn.text = "재개" if sim.paused else "일시정지"
-			_style_button(pause_btn, sim.paused, 32, 13)
+			_style_button(pause_btn, sim.paused, 30, 12)
 
 func _refresh_metrics() -> void:
 	if sim == null or lbl_phase == null:
@@ -831,6 +1022,9 @@ func _refresh_metrics() -> void:
 		lbl_phase.text = "신호: %s (%.1f초)" % [m["phase"], t_rem]
 	else:
 		lbl_phase.text = "신호: %s" % m["phase"]
+
+	var is_em: bool = m["emergency"]
+	lbl_phase.add_theme_color_override("font_color", Color(1.0, 0.42, 0.36) if is_em else Color(0.55, 0.88, 1.0))
 
 	if _is_mobile:
 		if lbl_counts:
