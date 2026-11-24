@@ -34,4 +34,6 @@ godot4 --headless --path . --export-release "Web" web_build/index.html
   ```bash
   npx vercel --prod
   ```
-- **GitHub 연동**: 저장소를 Vercel 대시보드에서 Import하면 `web_build/`가 즉시 배포됩니다.
+- **GitHub 연동 (원클릭 배포)**:
+  - [Vercel에서 바로 Import하여 배포하기](https://vercel.com/new/import?s=https://github.com/knoxxr/intersection-simulator-3d)
+  - 저장소: https://github.com/knoxxr/intersection-simulator-3d
