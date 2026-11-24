@@ -268,44 +268,44 @@ func is_unprotected_left(approach_idx: int, turn_type: int) -> bool:
 
 func get_phase_label() -> String:
 	if _emergency_approach >= 0:
-		var dir_str := "남북" if (_emergency_approach == 0 or _emergency_approach == 1) else "동서"
-		return "🚑 긴급 우선신호 (%s 통과)" % dir_str
+		var dir_str := Lang.t("axis_ns") if (_emergency_approach == 0 or _emergency_approach == 1) else Lang.t("axis_ew")
+		return Lang.t("ph_emerg") % dir_str
 
 	match mode:
 		SignalMode.ALL_RED:
-			return "전체 적색 (긴급 정지)"
+			return Lang.t("ph_all_red")
 		SignalMode.FLASHING_YELLOW:
-			return "황색 점멸 (주의 서행)"
+			return Lang.t("ph_flash")
 		SignalMode.SMART_ADAPTIVE:
 			match phase_index:
-				0: return "AI감응 남북 녹색 (%d:%d)" % [_smart_ns_wait, _smart_ew_wait]
-				1: return "AI감응 남북 황색"
-				2: return "전방 적색 (정리)"
-				3: return "AI감응 동서 녹색 (%d:%d)" % [_smart_ns_wait, _smart_ew_wait]
-				4: return "AI감응 동서 황색"
-				5: return "전방 적색 (정리)"
+				0: return Lang.t("ph_ai_ns_g") % [_smart_ns_wait, _smart_ew_wait]
+				1: return Lang.t("ph_ai_ns_y")
+				2: return Lang.t("ph_clear")
+				3: return Lang.t("ph_ai_ew_g") % [_smart_ns_wait, _smart_ew_wait]
+				4: return Lang.t("ph_ai_ew_y")
+				5: return Lang.t("ph_clear")
 		SignalMode.TWO_PHASE:
 			match phase_index:
-				0: return "남북 직진/회전 녹색"
-				1: return "남북 황색"
-				2: return "전방 적색 (정리)"
-				3: return "동서 직진/회전 녹색"
-				4: return "동서 황색"
-				5: return "전방 적색 (정리)"
+				0: return Lang.t("ph_ns_g")
+				1: return Lang.t("ph_ns_y")
+				2: return Lang.t("ph_clear")
+				3: return Lang.t("ph_ew_g")
+				4: return Lang.t("ph_ew_y")
+				5: return Lang.t("ph_clear")
 		SignalMode.FOUR_PHASE:
 			match phase_index:
-				0: return "남북 직진/우회전 녹색"
-				1: return "남북 직진 황색"
-				2: return "전방 적색 (정리)"
-				3: return "남북 좌회전 보호 신호"
-				4: return "남북 좌회전 황색"
-				5: return "전방 적색 (정리)"
-				6: return "동서 직진/우회전 녹색"
-				7: return "동서 직진 황색"
-				8: return "전방 적색 (정리)"
-				9: return "동서 좌회전 보호 신호"
-				10: return "동서 좌회전 황색"
-				11: return "전방 적색 (정리)"
+				0: return Lang.t("ph_ns_st_g")
+				1: return Lang.t("ph_ns_st_y")
+				2: return Lang.t("ph_clear")
+				3: return Lang.t("ph_ns_lt_g")
+				4: return Lang.t("ph_ns_lt_y")
+				5: return Lang.t("ph_clear")
+				6: return Lang.t("ph_ew_st_g")
+				7: return Lang.t("ph_ew_st_y")
+				8: return Lang.t("ph_clear")
+				9: return Lang.t("ph_ew_lt_g")
+				10: return Lang.t("ph_ew_lt_y")
+				11: return Lang.t("ph_clear")
 	return "-"
 
 func get_time_remaining() -> float:

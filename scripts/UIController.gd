@@ -14,7 +14,7 @@ var _force_mode: int = 0 # 0 = auto, 1 = force mobile, 2 = force desktop
 var _startup_resync_done: bool = false
 var _startup_timer: float = 0.0
 
-# Cached history so rebuilding UI on rotate/preset preserves graph history
+# Cached history so rebuilding UI on rotate/preset/lang preserves graph history
 var _hist_wait: PackedFloat32Array = PackedFloat32Array()
 var _hist_tp: PackedFloat32Array = PackedFloat32Array()
 
@@ -166,16 +166,15 @@ func _sync_scale_and_layout(force_rebuild: bool) -> void:
 	sim.orbit_camera.set_portrait_mode(portrait)
 
 	if force_rebuild or (not _ui_built) or (_is_mobile != want_mobile):
-		var keep_open := _drawer_open and _ui_built and (_is_mobile == want_mobile)
+		var same_mode := _ui_built and (_is_mobile == want_mobile)
+		var prev_open := _drawer_open
 		_is_mobile = want_mobile
 		_ui_built = true
 		if _is_mobile:
-			_drawer_open = keep_open
+			_drawer_open = prev_open if same_mode else false
 			_build_mobile_ui(portrait)
 		else:
-			_drawer_open = true if not force_rebuild else _drawer_open
-			if not keep_open and not _drawer_open:
-				_drawer_open = true
+			_drawer_open = prev_open if same_mode else true
 			_build_desktop_ui()
 		_restore_graph_history()
 		_refresh_metrics()
@@ -192,6 +191,10 @@ func _restore_graph_history() -> void:
 
 func _toggle_ui_layout_mode() -> void:
 	_force_mode = 2 if _is_mobile else 1
+	_sync_scale_and_layout(true)
+
+func _on_toggle_language() -> void:
+	Lang.toggle()
 	_sync_scale_and_layout(true)
 
 func _apply_preset_and_sync(preset_id: String) -> void:
@@ -245,7 +248,7 @@ func _style_button(btn: Button, active: bool = false, min_h: int = 34, font_sz: 
 	btn.add_theme_color_override("font_color", Color(0.96, 0.98, 1.0))
 
 # ==============================================================================
-# MOBILE / PORTRAIT UI (Compact Top Bar + Floating Quick Actions + Bottom Sheet)
+# MOBILE / PORTRAIT UI
 # ==============================================================================
 func _build_mobile_ui(portrait: bool = true) -> void:
 	_clear_ui()
@@ -267,39 +270,46 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	top_bar.add_child(top_v)
 
 	var row1 := HBoxContainer.new()
-	row1.add_theme_constant_override("separation", 6)
+	row1.add_theme_constant_override("separation", 5)
 	top_v.add_child(row1)
 
 	lbl_phase = Label.new()
-	lbl_phase.text = "신호: -"
+	lbl_phase.text = "-"
 	lbl_phase.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lbl_phase.clip_text = true
-	lbl_phase.add_theme_font_size_override("font_size", 14)
+	lbl_phase.add_theme_font_size_override("font_size", 13)
 	lbl_phase.add_theme_color_override("font_color", Color(0.55, 0.88, 1.0))
 	row1.add_child(lbl_phase)
 
+	var lang_btn := Button.new()
+	lang_btn.text = Lang.t("lang_btn")
+	lang_btn.custom_minimum_size = Vector2(52, 34)
+	_style_button(lang_btn, false, 34, 12)
+	lang_btn.pressed.connect(_on_toggle_language)
+	row1.add_child(lang_btn)
+
 	pause_btn = Button.new()
 	pause_btn.text = "▶" if sim.paused else "⏸"
-	pause_btn.custom_minimum_size = Vector2(40, 34)
+	pause_btn.custom_minimum_size = Vector2(38, 34)
 	_style_button(pause_btn, sim.paused, 34, 15)
 	pause_btn.pressed.connect(_on_toggle_pause)
 	row1.add_child(pause_btn)
 
 	toggle_panel_btn = Button.new()
-	toggle_panel_btn.text = "✕ 닫기" if _drawer_open else "⚙ 설정"
-	toggle_panel_btn.custom_minimum_size = Vector2(78, 34)
-	_style_button(toggle_panel_btn, _drawer_open, 34, 14)
+	toggle_panel_btn.text = Lang.t("close") if _drawer_open else Lang.t("settings")
+	toggle_panel_btn.custom_minimum_size = Vector2(74, 34)
+	_style_button(toggle_panel_btn, _drawer_open, 34, 13)
 	toggle_panel_btn.pressed.connect(_on_toggle_mobile_drawer)
 	row1.add_child(toggle_panel_btn)
 
 	lbl_counts = Label.new()
-	lbl_counts.text = "주행 0 | 대기 0 | 통과 0 (0/분) | 평균 0.0초"
+	lbl_counts.text = ""
 	lbl_counts.clip_text = true
 	lbl_counts.add_theme_font_size_override("font_size", 12)
 	lbl_counts.add_theme_color_override("font_color", Color(0.88, 0.92, 0.96))
 	top_v.add_child(lbl_counts)
 
-	# 2. Floating Right Quick-Action Buttons (Zoom +/-, Camera, Next Signal, Ambulance)
+	# 2. Floating Right Quick-Action Buttons
 	floating_controls = VBoxContainer.new()
 	floating_controls.anchor_left = 1.0
 	floating_controls.anchor_right = 1.0
@@ -314,7 +324,7 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	add_child(floating_controls)
 
 	var amb_quick := Button.new()
-	amb_quick.text = "구급"
+	amb_quick.text = Lang.t("quick_amb")
 	amb_quick.custom_minimum_size = Vector2(46, 44)
 	_style_button(amb_quick, false, 44, 12, true)
 	amb_quick.pressed.connect(func(): sim.dispatch_ambulance())
@@ -335,14 +345,14 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	floating_controls.add_child(zoom_out_btn)
 
 	var cam_cycle_btn := Button.new()
-	cam_cycle_btn.text = "시점"
+	cam_cycle_btn.text = Lang.t("quick_view")
 	cam_cycle_btn.custom_minimum_size = Vector2(46, 44)
 	_style_button(cam_cycle_btn, false, 44, 12)
 	cam_cycle_btn.pressed.connect(_on_cycle_camera)
 	floating_controls.add_child(cam_cycle_btn)
 
 	var next_sig_btn := Button.new()
-	next_sig_btn.text = "신호"
+	next_sig_btn.text = Lang.t("quick_sig")
 	next_sig_btn.custom_minimum_size = Vector2(46, 44)
 	_style_button(next_sig_btn, false, 44, 12)
 	next_sig_btn.pressed.connect(func(): sim.traffic_ctrl.force_next_phase())
@@ -374,12 +384,12 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	tab_bar.add_theme_constant_override("separation", 5)
 	sheet_v.add_child(tab_bar)
 
-	var tab_names := ["시나리오", "차선", "트래픽", "신호등", "제어"]
-	for t in range(tab_names.size()):
+	var tab_keys := ["tab_presets", "tab_lanes", "tab_traffic", "tab_signals", "tab_control"]
+	for t in range(tab_keys.size()):
 		var tb := Button.new()
-		tb.text = tab_names[t]
+		tb.text = Lang.t(tab_keys[t])
 		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_style_button(tb, t == _active_mobile_tab, 40, 13)
+		_style_button(tb, t == _active_mobile_tab, 40, 12)
 		var tab_idx := t
 		tb.pressed.connect(func(): _select_mobile_tab(tab_idx))
 		tab_bar.add_child(tb)
@@ -434,15 +444,15 @@ func _select_mobile_tab(idx: int) -> void:
 	for i in range(mobile_tab_pages.size()):
 		mobile_tab_pages[i].visible = (i == idx)
 	for i in range(mobile_tab_btns.size()):
-		_style_button(mobile_tab_btns[i], i == idx, 40, 13)
+		_style_button(mobile_tab_btns[i], i == idx, 40, 12)
 
 func _on_toggle_mobile_drawer() -> void:
 	_drawer_open = not _drawer_open
 	if panel_container:
 		panel_container.visible = _drawer_open
 	if toggle_panel_btn:
-		toggle_panel_btn.text = "✕ 닫기" if _drawer_open else "⚙ 설정"
-		_style_button(toggle_panel_btn, _drawer_open, 34, 14)
+		toggle_panel_btn.text = Lang.t("close") if _drawer_open else Lang.t("settings")
+		_style_button(toggle_panel_btn, _drawer_open, 34, 13)
 	if floating_controls:
 		floating_controls.visible = not _drawer_open
 
@@ -459,9 +469,9 @@ func _on_cycle_camera() -> void:
 func _build_desktop_ui() -> void:
 	_clear_ui()
 
-	# 1. Top-Left Bar: Panel Toggle + Mobile UI Switch
+	# 1. Top-Left Bar: Panel Toggle + Mobile UI Switch + Language Toggle
 	toggle_panel_btn = Button.new()
-	toggle_panel_btn.text = "◀ 패널 접기" if _drawer_open else "▶ 제어 패널"
+	toggle_panel_btn.text = Lang.t("panel_hide") if _drawer_open else Lang.t("panel_show")
 	toggle_panel_btn.position = Vector2(14, 12)
 	toggle_panel_btn.size = Vector2(116, 32)
 	_style_button(toggle_panel_btn, false, 32, 13)
@@ -469,12 +479,20 @@ func _build_desktop_ui() -> void:
 	add_child(toggle_panel_btn)
 
 	var mode_btn := Button.new()
-	mode_btn.text = "모바일 UI"
+	mode_btn.text = Lang.t("mobile_ui")
 	mode_btn.position = Vector2(138, 12)
 	mode_btn.size = Vector2(96, 32)
 	_style_button(mode_btn, false, 32, 13)
 	mode_btn.pressed.connect(_toggle_ui_layout_mode)
 	add_child(mode_btn)
+
+	var lang_btn := Button.new()
+	lang_btn.text = Lang.t("lang_btn")
+	lang_btn.position = Vector2(242, 12)
+	lang_btn.size = Vector2(72, 32)
+	_style_button(lang_btn, false, 32, 13)
+	lang_btn.pressed.connect(_on_toggle_language)
+	add_child(lang_btn)
 
 	# 2. Left Control Panel (Scrollable)
 	panel_container = PanelContainer.new()
@@ -500,31 +518,31 @@ func _build_desktop_ui() -> void:
 	scroll.add_child(vbox)
 
 	var title := Label.new()
-	title.text = "3D 교차로 교통 시뮬레이터"
-	title.add_theme_font_size_override("font_size", 17)
+	title.text = Lang.t("app_title")
+	title.add_theme_font_size_override("font_size", 16)
 	title.add_theme_color_override("font_color", Color(0.95, 0.98, 1.0))
 	vbox.add_child(title)
 
-	_add_section_header(vbox, "시나리오 프리셋 & 긴급출동")
+	_add_section_header(vbox, Lang.t("sec_presets"))
 	_populate_scenario_controls(vbox, false)
 
-	_add_section_header(vbox, "시뮬레이션 · 카메라 · 시간대")
+	_add_section_header(vbox, Lang.t("sec_sim_cam"))
 	_populate_sim_camera_controls(vbox, false)
 
-	_add_section_header(vbox, "차선 설정 (비대칭·실시간 반영)")
+	_add_section_header(vbox, Lang.t("sec_lanes"))
 	_populate_lane_controls(vbox, false)
 
-	_add_section_header(vbox, "트래픽 양 & 회전 비율")
+	_add_section_header(vbox, Lang.t("sec_traffic"))
 	_populate_traffic_controls(vbox, false)
 
-	_add_section_header(vbox, "신호등 제어 & AI 감응")
+	_add_section_header(vbox, Lang.t("sec_signals"))
 	_populate_signal_controls(vbox, false)
 
 	# 3. Top-Right Real-Time Telemetry HUD + Live Trend Graph
 	var hud := PanelContainer.new()
 	hud.anchor_left = 1.0
 	hud.anchor_right = 1.0
-	hud.offset_left = -324
+	hud.offset_left = -330
 	hud.offset_right = -14
 	hud.offset_top = 12
 	hud.offset_bottom = 228
@@ -537,23 +555,23 @@ func _build_desktop_ui() -> void:
 	hud.add_child(hud_v)
 
 	var hud_title := Label.new()
-	hud_title.text = "실시간 교차로 현황"
+	hud_title.text = Lang.t("hud_title")
 	hud_title.add_theme_font_size_override("font_size", 14)
 	hud_title.add_theme_color_override("font_color", Color(0.55, 0.85, 1.0))
 	hud_v.add_child(hud_title)
 
 	lbl_phase = Label.new()
-	lbl_phase.text = "신호: -"
+	lbl_phase.text = "-"
 	lbl_phase.add_theme_font_size_override("font_size", 13)
 	hud_v.add_child(lbl_phase)
 
 	lbl_counts = Label.new()
-	lbl_counts.text = "주행 중: 0대 | 정차 대기: 0대"
+	lbl_counts.text = ""
 	lbl_counts.add_theme_font_size_override("font_size", 13)
 	hud_v.add_child(lbl_counts)
 
 	lbl_perf = Label.new()
-	lbl_perf.text = "통과: 0대 | 0대/분 | 평균대기 0.0초"
+	lbl_perf.text = ""
 	lbl_perf.add_theme_font_size_override("font_size", 12)
 	lbl_perf.add_theme_color_override("font_color", Color(0.84, 0.90, 0.96))
 	hud_v.add_child(lbl_perf)
@@ -574,7 +592,7 @@ func _build_desktop_ui() -> void:
 	add_child(hint)
 
 	var hint_lbl := Label.new()
-	hint_lbl.text = "마우스 드래그: 회전 | 휠: 확대/축소"
+	hint_lbl.text = Lang.t("desktop_hint")
 	hint_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint_lbl.add_theme_font_size_override("font_size", 12)
 	hint_lbl.add_theme_color_override("font_color", Color(0.8, 0.86, 0.92))
@@ -582,7 +600,7 @@ func _build_desktop_ui() -> void:
 
 func _add_graph_block(parent: VBoxContainer) -> void:
 	var leg := Label.new()
-	leg.text = "추이: 하늘(처리량/분) · 주황(대기차량)"
+	leg.text = Lang.t("graph_legend")
 	leg.add_theme_font_size_override("font_size", 11)
 	leg.add_theme_color_override("font_color", Color(0.74, 0.82, 0.90))
 	parent.add_child(leg)
@@ -597,7 +615,7 @@ func _on_toggle_desktop_panel() -> void:
 	if panel_container:
 		panel_container.visible = _drawer_open
 	if toggle_panel_btn:
-		toggle_panel_btn.text = "◀ 패널 접기" if _drawer_open else "▶ 제어 패널"
+		toggle_panel_btn.text = Lang.t("panel_hide") if _drawer_open else Lang.t("panel_show")
 
 # ==============================================================================
 # SHARED CONTROL BUILDERS
@@ -607,7 +625,7 @@ func _populate_scenario_controls(parent: VBoxContainer, touch: bool) -> void:
 	var fsz := 14 if touch else 12
 
 	var amb_btn := Button.new()
-	amb_btn.text = "🚑 구급차 긴급 출동 (우선신호)"
+	amb_btn.text = Lang.t("btn_ambulance")
 	_style_button(amb_btn, false, btn_h + 2, fsz + 1, true)
 	amb_btn.pressed.connect(func(): sim.dispatch_ambulance())
 	parent.add_child(amb_btn)
@@ -617,14 +635,14 @@ func _populate_scenario_controls(parent: VBoxContainer, touch: bool) -> void:
 	parent.add_child(row1)
 
 	var p_norm := Button.new()
-	p_norm.text = "평시 균형"
+	p_norm.text = Lang.t("preset_normal")
 	p_norm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_button(p_norm, false, btn_h, fsz)
 	p_norm.pressed.connect(func(): _apply_preset_and_sync("normal"))
 	row1.add_child(p_norm)
 
 	var p_rush := Button.new()
-	p_rush.text = "출근 러시(AI)"
+	p_rush.text = Lang.t("preset_rush")
 	p_rush.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_button(p_rush, false, btn_h, fsz)
 	p_rush.pressed.connect(func(): _apply_preset_and_sync("rush_hour"))
@@ -635,14 +653,14 @@ func _populate_scenario_controls(parent: VBoxContainer, touch: bool) -> void:
 	parent.add_child(row2)
 
 	var p_left := Button.new()
-	p_left.text = "좌회전 정체"
+	p_left.text = Lang.t("preset_left")
 	p_left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_button(p_left, false, btn_h, fsz)
 	p_left.pressed.connect(func(): _apply_preset_and_sync("left_jam"))
 	row2.add_child(p_left)
 
 	var p_const := Button.new()
-	p_const.text = "1차선 공사"
+	p_const.text = Lang.t("preset_const")
 	p_const.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_button(p_const, false, btn_h, fsz)
 	p_const.pressed.connect(func(): _apply_preset_and_sync("construction"))
@@ -657,12 +675,12 @@ func _populate_sim_camera_controls(parent: VBoxContainer, touch: bool) -> void:
 	parent.add_child(sim_row)
 
 	var p_btn := Button.new()
-	p_btn.text = "재개" if sim.paused else "일시정지"
+	p_btn.text = Lang.t("resume") if sim.paused else Lang.t("pause")
 	p_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_button(p_btn, sim.paused, btn_h, fsz)
 	p_btn.pressed.connect(func():
 		_on_toggle_pause()
-		p_btn.text = "재개" if sim.paused else "일시정지"
+		p_btn.text = Lang.t("resume") if sim.paused else Lang.t("pause")
 		_style_button(p_btn, sim.paused, btn_h, fsz)
 	)
 	sim_row.add_child(p_btn)
@@ -670,7 +688,7 @@ func _populate_sim_camera_controls(parent: VBoxContainer, touch: bool) -> void:
 		pause_btn = p_btn
 
 	var reset_btn := Button.new()
-	reset_btn.text = "차량 초기화"
+	reset_btn.text = Lang.t("reset_cars")
 	reset_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_button(reset_btn, false, btn_h, fsz)
 	reset_btn.pressed.connect(func():
@@ -686,7 +704,7 @@ func _populate_sim_camera_controls(parent: VBoxContainer, touch: bool) -> void:
 	speed_row.add_theme_constant_override("separation", 5)
 	parent.add_child(speed_row)
 	var sp_lbl := Label.new()
-	sp_lbl.text = "배속:"
+	sp_lbl.text = Lang.t("speed_lbl")
 	sp_lbl.add_theme_font_size_override("font_size", fsz)
 	speed_row.add_child(sp_lbl)
 
@@ -710,41 +728,40 @@ func _populate_sim_camera_controls(parent: VBoxContainer, touch: bool) -> void:
 	parent.add_child(cam_row)
 
 	var cam_iso := Button.new()
-	cam_iso.text = "3D 시점"
+	cam_iso.text = Lang.t("cam_3d")
 	cam_iso.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_button(cam_iso, false, btn_h, fsz)
 	cam_iso.pressed.connect(func(): sim.orbit_camera.set_preset_iso())
 	cam_row.add_child(cam_iso)
 
 	var cam_top := Button.new()
-	cam_top.text = "탑뷰"
+	cam_top.text = Lang.t("cam_top")
 	cam_top.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_button(cam_top, false, btn_h, fsz)
 	cam_top.pressed.connect(func(): sim.orbit_camera.set_preset_top())
 	cam_row.add_child(cam_top)
 
 	var cam_low := Button.new()
-	cam_low.text = "근접 시점"
+	cam_low.text = Lang.t("cam_low")
 	cam_low.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_button(cam_low, false, btn_h, fsz)
 	cam_low.pressed.connect(func(): sim.orbit_camera.set_preset_street())
 	cam_row.add_child(cam_low)
 
-	# Time-of-day lighting buttons (Day / Sunset / Night)
 	var tod_row := HBoxContainer.new()
 	tod_row.add_theme_constant_override("separation", 5)
 	parent.add_child(tod_row)
 	var tod_lbl := Label.new()
-	tod_lbl.text = "시간대:"
+	tod_lbl.text = Lang.t("time_lbl")
 	tod_lbl.add_theme_font_size_override("font_size", fsz)
 	tod_row.add_child(tod_lbl)
 
 	time_btns.clear()
-	var tod_labels := ["낮", "노을", "야간"]
+	var tod_keys := ["time_day", "time_sunset", "time_night"]
 	var tod_modes := [RoadBuilder.TimeOfDay.DAY, RoadBuilder.TimeOfDay.SUNSET, RoadBuilder.TimeOfDay.NIGHT]
 	for i in range(3):
 		var tb := Button.new()
-		tb.text = tod_labels[i]
+		tb.text = Lang.t(tod_keys[i])
 		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var m_val: RoadBuilder.TimeOfDay = tod_modes[i]
 		_style_button(tb, sim.road_builder.time_of_day == m_val, btn_h, fsz)
@@ -755,9 +772,8 @@ func _populate_sim_camera_controls(parent: VBoxContainer, touch: bool) -> void:
 		tod_row.add_child(tb)
 		time_btns.append(tb)
 
-	# Congestion curb overlay toggle
 	var cong_cb := CheckBox.new()
-	cong_cb.text = "도로 혼잡도 색상 표시 (초록/노랑/빨강)"
+	cong_cb.text = Lang.t("cong_overlay")
 	cong_cb.button_pressed = sim.road_builder.congestion_overlay_enabled
 	cong_cb.custom_minimum_size.y = 36 if touch else 24
 	cong_cb.add_theme_font_size_override("font_size", fsz)
@@ -766,13 +782,13 @@ func _populate_sim_camera_controls(parent: VBoxContainer, touch: bool) -> void:
 
 	if touch:
 		var pc_btn := Button.new()
-		pc_btn.text = "데스크톱(PC) UI로 전환"
+		pc_btn.text = Lang.t("pc_ui")
 		_style_button(pc_btn, false, btn_h, fsz)
 		pc_btn.pressed.connect(_toggle_ui_layout_mode)
 		parent.add_child(pc_btn)
 
 		var tip := Label.new()
-		tip.text = "팁: 한 손가락 드래그(회전) · 두 손가락 핀치(확대/축소)"
+		tip.text = Lang.t("touch_tip")
 		tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		tip.add_theme_font_size_override("font_size", 12)
 		tip.add_theme_color_override("font_color", Color(0.75, 0.82, 0.90))
@@ -788,17 +804,19 @@ func _refresh_time_button_styles(btn_h: int, fsz: int) -> void:
 	for i in range(min(time_btns.size(), tod_modes.size())):
 		_style_button(time_btns[i], sim.road_builder.time_of_day == tod_modes[i], btn_h, fsz)
 
+func _lane_btn_label(cnt: int) -> String:
+	return (Lang.t("lane_n") if cnt == 1 else Lang.t("lane_n_pl")) % cnt
+
 func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 	var btn_h := 42 if touch else 30
 	var fsz := 14 if touch else 12
 	var cb_fsz := 14 if touch else 12
 
-	# Asymmetric N-S lane count
 	var ns_row := HBoxContainer.new()
 	ns_row.add_theme_constant_override("separation", 5)
 	parent.add_child(ns_row)
 	var ns_lbl := Label.new()
-	ns_lbl.text = "남북 차선:"
+	ns_lbl.text = Lang.t("ns_lanes")
 	ns_lbl.add_theme_font_size_override("font_size", fsz)
 	ns_row.add_child(ns_lbl)
 
@@ -806,7 +824,7 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 	for cnt in [1, 2, 3]:
 		var cnt_val: int = int(cnt)
 		var lb := Button.new()
-		lb.text = "%d차선" % cnt_val
+		lb.text = _lane_btn_label(cnt_val)
 		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_style_button(lb, sim.spawner.ns_lanes == cnt_val, btn_h, fsz)
 		lb.pressed.connect(func():
@@ -817,12 +835,11 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 		ns_row.add_child(lb)
 		ns_lane_btns.append(lb)
 
-	# Asymmetric E-W lane count
 	var ew_row := HBoxContainer.new()
 	ew_row.add_theme_constant_override("separation", 5)
 	parent.add_child(ew_row)
 	var ew_lbl := Label.new()
-	ew_lbl.text = "동서 차선:"
+	ew_lbl.text = Lang.t("ew_lanes")
 	ew_lbl.add_theme_font_size_override("font_size", fsz)
 	ew_row.add_child(ew_lbl)
 
@@ -830,7 +847,7 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 	for cnt in [1, 2, 3]:
 		var cnt_val: int = int(cnt)
 		var lb := Button.new()
-		lb.text = "%d차선" % cnt_val
+		lb.text = _lane_btn_label(cnt_val)
 		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_style_button(lb, sim.spawner.ew_lanes == cnt_val, btn_h, fsz)
 		lb.pressed.connect(func():
@@ -842,7 +859,7 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 		ew_lane_btns.append(lb)
 
 	var lane_open_lbl := Label.new()
-	lane_open_lbl.text = "개별 차선 개방 (해제 시 공사 라바콘 배치):"
+	lane_open_lbl.text = Lang.t("lane_open_lbl")
 	lane_open_lbl.add_theme_font_size_override("font_size", cb_fsz)
 	lane_open_lbl.add_theme_color_override("font_color", Color(0.80, 0.86, 0.94))
 	parent.add_child(lane_open_lbl)
@@ -851,10 +868,10 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 	lane_open_row.add_theme_constant_override("separation", 8)
 	parent.add_child(lane_open_row)
 	lane_checkboxes.clear()
-	var lane_names := ["1차선(내)", "2차선", "3차선(외)"]
+	var lane_keys := ["lane_1", "lane_2", "lane_3"]
 	for idx in range(3):
 		var cb := CheckBox.new()
-		cb.text = lane_names[idx]
+		cb.text = Lang.t(lane_keys[idx])
 		cb.button_pressed = sim.spawner.lane_enabled[idx]
 		cb.custom_minimum_size.y = 38 if touch else 26
 		cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -869,13 +886,13 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 	dir_open_row.add_theme_constant_override("separation", 6)
 	parent.add_child(dir_open_row)
 	var dir_lbl := Label.new()
-	dir_lbl.text = "진입:"
+	dir_lbl.text = Lang.t("approach_lbl")
 	dir_lbl.add_theme_font_size_override("font_size", cb_fsz)
 	dir_open_row.add_child(dir_lbl)
-	var dir_names := ["북", "남", "동", "서"]
+	var dir_keys := ["dir_n", "dir_s", "dir_e", "dir_w"]
 	for a in range(4):
 		var dcb := CheckBox.new()
-		dcb.text = dir_names[a]
+		dcb.text = Lang.t(dir_keys[a])
 		dcb.button_pressed = sim.spawner.approach_enabled[a]
 		dcb.custom_minimum_size.y = 38 if touch else 26
 		dcb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -891,40 +908,41 @@ func _refresh_lane_count_styles(btn_h: int, fsz: int) -> void:
 		_style_button(ew_lane_btns[i], sim.spawner.ew_lanes == (i + 1), btn_h, fsz)
 
 func _populate_traffic_controls(parent: VBoxContainer, touch: bool) -> void:
-	_add_slider(parent, "전체 교통량", 0.0, 3.0, 0.1, sim.spawner.global_traffic_rate, "x", touch, func(val: float):
+	_add_slider(parent, Lang.t("vol_global"), 0.0, 3.0, 0.1, sim.spawner.global_traffic_rate, "x", touch, func(val: float):
 		sim.spawner.global_traffic_rate = val
 	)
-	_add_slider(parent, "북→남 통행량", 0.0, 2.0, 0.1, sim.spawner.dir_traffic_mult[0], "x", touch, func(val: float):
+	_add_slider(parent, Lang.t("vol_ns"), 0.0, 2.0, 0.1, sim.spawner.dir_traffic_mult[0], "x", touch, func(val: float):
 		sim.spawner.dir_traffic_mult[0] = val
 	)
-	_add_slider(parent, "남→북 통행량", 0.0, 2.0, 0.1, sim.spawner.dir_traffic_mult[1], "x", touch, func(val: float):
+	_add_slider(parent, Lang.t("vol_sn"), 0.0, 2.0, 0.1, sim.spawner.dir_traffic_mult[1], "x", touch, func(val: float):
 		sim.spawner.dir_traffic_mult[1] = val
 	)
-	_add_slider(parent, "동→서 통행량", 0.0, 2.0, 0.1, sim.spawner.dir_traffic_mult[2], "x", touch, func(val: float):
+	_add_slider(parent, Lang.t("vol_ew"), 0.0, 2.0, 0.1, sim.spawner.dir_traffic_mult[2], "x", touch, func(val: float):
 		sim.spawner.dir_traffic_mult[2] = val
 	)
-	_add_slider(parent, "서→동 통행량", 0.0, 2.0, 0.1, sim.spawner.dir_traffic_mult[3], "x", touch, func(val: float):
+	_add_slider(parent, Lang.t("vol_we"), 0.0, 2.0, 0.1, sim.spawner.dir_traffic_mult[3], "x", touch, func(val: float):
 		sim.spawner.dir_traffic_mult[3] = val
 	)
-	_add_slider(parent, "좌회전 비율", 0.0, 60.0, 2.0, sim.spawner.left_turn_ratio * 100.0, "%", touch, func(val: float):
+	_add_slider(parent, Lang.t("ratio_left"), 0.0, 60.0, 2.0, sim.spawner.left_turn_ratio * 100.0, "%", touch, func(val: float):
 		sim.spawner.left_turn_ratio = val / 100.0
 	)
-	_add_slider(parent, "우회전 비율", 0.0, 50.0, 2.0, sim.spawner.right_turn_ratio * 100.0, "%", touch, func(val: float):
+	_add_slider(parent, Lang.t("ratio_right"), 0.0, 50.0, 2.0, sim.spawner.right_turn_ratio * 100.0, "%", touch, func(val: float):
 		sim.spawner.right_turn_ratio = val / 100.0
 	)
 
 func _populate_signal_controls(parent: VBoxContainer, touch: bool) -> void:
 	var btn_h := 42 if touch else 32
 	var fsz := 14 if touch else 13
+	var sec := Lang.t("unit_sec")
 
 	var mode_opt := OptionButton.new()
 	mode_opt.custom_minimum_size.y = btn_h
 	mode_opt.add_theme_font_size_override("font_size", fsz)
-	mode_opt.add_item("2현시 (남북/동서 교대)", TrafficController.SignalMode.TWO_PHASE)
-	mode_opt.add_item("4현시 (좌회전 보호 신호)", TrafficController.SignalMode.FOUR_PHASE)
-	mode_opt.add_item("스마트 감응 (AI 대기열 자동 제어)", TrafficController.SignalMode.SMART_ADAPTIVE)
-	mode_opt.add_item("황색 점멸 (주의 서행)", TrafficController.SignalMode.FLASHING_YELLOW)
-	mode_opt.add_item("전체 적색 (정체 테스트)", TrafficController.SignalMode.ALL_RED)
+	mode_opt.add_item(Lang.t("mode_2p"), TrafficController.SignalMode.TWO_PHASE)
+	mode_opt.add_item(Lang.t("mode_4p"), TrafficController.SignalMode.FOUR_PHASE)
+	mode_opt.add_item(Lang.t("mode_ai"), TrafficController.SignalMode.SMART_ADAPTIVE)
+	mode_opt.add_item(Lang.t("mode_flash"), TrafficController.SignalMode.FLASHING_YELLOW)
+	mode_opt.add_item(Lang.t("mode_red"), TrafficController.SignalMode.ALL_RED)
 	var cur_idx := mode_opt.get_item_index(int(sim.traffic_ctrl.mode))
 	if cur_idx >= 0:
 		mode_opt.select(cur_idx)
@@ -934,21 +952,21 @@ func _populate_signal_controls(parent: VBoxContainer, touch: bool) -> void:
 	)
 	parent.add_child(mode_opt)
 
-	_add_slider(parent, "남북 녹색 시간", 2.0, 20.0, 0.5, sim.traffic_ctrl.ns_green_duration, "초", touch, func(val: float):
+	_add_slider(parent, Lang.t("dur_ns"), 2.0, 20.0, 0.5, sim.traffic_ctrl.ns_green_duration, sec, touch, func(val: float):
 		sim.traffic_ctrl.ns_green_duration = val
 	)
-	_add_slider(parent, "동서 녹색 시간", 2.0, 20.0, 0.5, sim.traffic_ctrl.ew_green_duration, "초", touch, func(val: float):
+	_add_slider(parent, Lang.t("dur_ew"), 2.0, 20.0, 0.5, sim.traffic_ctrl.ew_green_duration, sec, touch, func(val: float):
 		sim.traffic_ctrl.ew_green_duration = val
 	)
-	_add_slider(parent, "좌회전 보호 시간", 2.0, 12.0, 0.5, sim.traffic_ctrl.left_green_duration, "초", touch, func(val: float):
+	_add_slider(parent, Lang.t("dur_left"), 2.0, 12.0, 0.5, sim.traffic_ctrl.left_green_duration, sec, touch, func(val: float):
 		sim.traffic_ctrl.left_green_duration = val
 	)
-	_add_slider(parent, "황색 신호 시간", 1.0, 5.0, 0.5, sim.traffic_ctrl.yellow_duration, "초", touch, func(val: float):
+	_add_slider(parent, Lang.t("dur_yellow"), 1.0, 5.0, 0.5, sim.traffic_ctrl.yellow_duration, sec, touch, func(val: float):
 		sim.traffic_ctrl.yellow_duration = val
 	)
 
 	var next_phase_btn := Button.new()
-	next_phase_btn.text = "다음 신호 즉시 전환"
+	next_phase_btn.text = Lang.t("btn_next_phase")
 	_style_button(next_phase_btn, false, btn_h, fsz)
 	next_phase_btn.pressed.connect(func(): sim.traffic_ctrl.force_next_phase())
 	parent.add_child(next_phase_btn)
@@ -1010,7 +1028,7 @@ func _on_toggle_pause() -> void:
 			pause_btn.text = "▶" if sim.paused else "⏸"
 			_style_button(pause_btn, sim.paused, 34, 15)
 		else:
-			pause_btn.text = "재개" if sim.paused else "일시정지"
+			pause_btn.text = Lang.t("resume") if sim.paused else Lang.t("pause")
 			_style_button(pause_btn, sim.paused, 30, 12)
 
 func _refresh_metrics() -> void:
@@ -1019,22 +1037,22 @@ func _refresh_metrics() -> void:
 	var m := sim.get_metrics()
 	var t_rem: float = m["phase_time"]
 	if t_rem > 0.0:
-		lbl_phase.text = "신호: %s (%.1f초)" % [m["phase"], t_rem]
+		lbl_phase.text = Lang.t("hud_signal_t") % [m["phase"], t_rem]
 	else:
-		lbl_phase.text = "신호: %s" % m["phase"]
+		lbl_phase.text = Lang.t("hud_signal") % m["phase"]
 
 	var is_em: bool = m["emergency"]
 	lbl_phase.add_theme_color_override("font_color", Color(1.0, 0.42, 0.36) if is_em else Color(0.55, 0.88, 1.0))
 
 	if _is_mobile:
 		if lbl_counts:
-			lbl_counts.text = "주행 %d | 대기 %d | 통과 %d (%.0f/분) | 평균 %.1f초" % [
+			lbl_counts.text = Lang.t("hud_mobile_stats") % [
 				m["active"], m["waiting"], m["passed"], m["throughput"], m["avg_wait"]
 			]
 	else:
 		if lbl_counts:
-			lbl_counts.text = "주행 중: %d대 | 정차 대기: %d대" % [m["active"], m["waiting"]]
+			lbl_counts.text = Lang.t("hud_counts_pc") % [m["active"], m["waiting"]]
 		if lbl_perf:
-			lbl_perf.text = "통과: %d대 | %.0f대/분 | 평균대기 %.1f초" % [
+			lbl_perf.text = Lang.t("hud_perf_pc") % [
 				m["passed"], m["throughput"], m["avg_wait"]
 			]
