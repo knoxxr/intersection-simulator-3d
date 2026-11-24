@@ -15,12 +15,17 @@ config/icon=""
 
 window/size/viewport_width=1280
 window/size/viewport_height=720
-window/stretch/mode="canvas_items"
-window/stretch/aspect="expand"
+window/stretch/mode="disabled"
+window/stretch/aspect="ignore"
 
 [gui]
 
 theme/custom_font="res://assets/fonts/NanumGothic-Regular.ttf"
+common/snap_controls_to_pixels=true
+
+[input_devices]
+
+pointing/emulate_mouse_from_touch=true
 
 [rendering]
 

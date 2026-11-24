@@ -5,14 +5,16 @@ var camera: Camera3D
 
 var yaw: float = 0.72          # Radians around Y
 var pitch: float = -0.68       # Radians down from horizon
-var distance: float = 52.0
+var distance: float = 54.0
 var target: Vector3 = Vector3.ZERO
 
 var target_yaw: float = 0.72
 var target_pitch: float = -0.68
-var target_distance: float = 52.0
+var target_distance: float = 54.0
 
 var dragging: bool = false
+var is_portrait: bool = false
+var _touches: Dictionary = {}  # finger_index -> Vector2 position
 
 func _ready() -> void:
 	camera = Camera3D.new()
@@ -24,17 +26,67 @@ func _ready() -> void:
 	camera.current = true
 	_update_camera_transform()
 
+func set_portrait_mode(portrait: bool) -> void:
+	if is_portrait == portrait:
+		return
+	is_portrait = portrait
+	if camera:
+		camera.fov = 56.0 if portrait else 48.0
+	# Pull back smoothly in portrait so the 4-way intersection stays nicely framed
+	if portrait and target_distance < 62.0:
+		target_distance = 68.0
+	elif not portrait and target_distance > 64.0:
+		target_distance = 52.0
+
 func _unhandled_input(event: InputEvent) -> void:
+	# Multi-touch support for mobile (1-finger orbit, 2-finger pinch zoom)
+	if event is InputEventScreenTouch:
+		var st := event as InputEventScreenTouch
+		if st.pressed:
+			_touches[st.index] = st.position
+		else:
+			_touches.erase(st.index)
+		return
+
+	if event is InputEventScreenDrag:
+		var sd := event as InputEventScreenDrag
+		var prev_pos: Vector2 = _touches.get(sd.index, sd.position - sd.relative)
+		_touches[sd.index] = sd.position
+
+		if _touches.size() == 1:
+			target_yaw -= sd.relative.x * 0.008
+			target_pitch = clamp(target_pitch - sd.relative.y * 0.008, -1.48, -0.18)
+		elif _touches.size() == 2:
+			var keys := _touches.keys()
+			var other_idx: int = keys[0] if keys[1] == sd.index else keys[1]
+			var other_pos: Vector2 = _touches[other_idx]
+			var prev_dist := prev_pos.distance_to(other_pos)
+			var curr_dist := sd.position.distance_to(other_pos)
+			var delta_dist := curr_dist - prev_dist
+			target_distance = clamp(target_distance - delta_dist * 0.12, 18.0, 120.0)
+		return
+
+	if event is InputEventMagnifyGesture:
+		var mg := event as InputEventMagnifyGesture
+		if mg.factor > 0.01:
+			target_distance = clamp(target_distance / mg.factor, 18.0, 120.0)
+		return
+
+	# Desktop mouse controls (ignore touch-emulated mouse events to avoid double-orbiting)
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		if mb.device == InputEvent.DEVICE_ID_EMULATION:
+			return
 		if mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT:
 			dragging = mb.pressed
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
-			target_distance = clamp(target_distance - 4.0, 18.0, 110.0)
+			zoom_in()
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			target_distance = clamp(target_distance + 4.0, 18.0, 110.0)
+			zoom_out()
 	elif event is InputEventMouseMotion and dragging:
 		var mm := event as InputEventMouseMotion
+		if mm.device == InputEvent.DEVICE_ID_EMULATION:
+			return
 		target_yaw -= mm.relative.x * 0.007
 		target_pitch = clamp(target_pitch - mm.relative.y * 0.007, -1.48, -0.18)
 
@@ -55,17 +107,23 @@ func _update_camera_transform() -> void:
 	camera.position = target + Vector3(x, y, z)
 	camera.look_at(target, Vector3.UP)
 
+func zoom_in() -> void:
+	target_distance = clamp(target_distance - 6.0, 18.0, 120.0)
+
+func zoom_out() -> void:
+	target_distance = clamp(target_distance + 6.0, 18.0, 120.0)
+
 func set_preset_iso() -> void:
 	target_yaw = 0.72
 	target_pitch = -0.68
-	target_distance = 52.0
+	target_distance = 68.0 if is_portrait else 52.0
 
 func set_preset_top() -> void:
 	target_yaw = 0.0
 	target_pitch = -1.46
-	target_distance = 62.0
+	target_distance = 82.0 if is_portrait else 62.0
 
 func set_preset_street() -> void:
 	target_yaw = 0.55
 	target_pitch = -0.26
-	target_distance = 28.0
+	target_distance = 34.0 if is_portrait else 28.0
