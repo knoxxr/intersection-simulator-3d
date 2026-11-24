@@ -98,7 +98,9 @@ func _create_bulb_mat(base_color: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = base_color
 	m.roughness = 0.25
-	m.emission_enabled = false
+	m.emission_enabled = true
+	m.emission = Color.BLACK
+	m.emission_energy_multiplier = 0.0
 	return m
 
 func set_display(main_color: SignalColor, left_green: bool) -> void:
@@ -113,9 +115,9 @@ func set_display(main_color: SignalColor, left_green: bool) -> void:
 func _set_bulb(mat: StandardMaterial3D, lit: bool, on_col: Color, off_col: Color) -> void:
 	if lit:
 		mat.albedo_color = on_col
-		mat.emission_enabled = true
 		mat.emission = on_col
-		mat.emission_energy_multiplier = 2.6
+		mat.emission_energy_multiplier = 2.4
 	else:
 		mat.albedo_color = off_col
-		mat.emission_enabled = false
+		mat.emission = Color.BLACK
+		mat.emission_energy_multiplier = 0.0

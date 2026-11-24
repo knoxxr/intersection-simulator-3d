@@ -85,8 +85,12 @@ func _make_box(bg: Color, border: Color, radius: int, pad_x: int, pad_y: int) ->
 	sb.content_margin_bottom = pad_y
 	return sb
 
+var _syncing_layout: bool = false
+
 func _on_viewport_resized() -> void:
-	_sync_scale_and_layout(false)
+	if _syncing_layout:
+		return
+	call_deferred("_sync_scale_and_layout", false)
 
 func _get_device_scale() -> float:
 	if OS.has_feature("web"):
@@ -97,8 +101,9 @@ func _get_device_scale() -> float:
 	return clampf(DisplayServer.screen_get_scale(), 1.0, 3.0)
 
 func _sync_scale_and_layout(force_rebuild: bool) -> void:
-	if sim == null:
+	if sim == null or _syncing_layout:
 		return
+	_syncing_layout = true
 	var scale_factor := _get_device_scale()
 	var root_win := get_tree().root
 	if root_win != null and absf(root_win.content_scale_factor - scale_factor) > 0.05:
@@ -125,6 +130,7 @@ func _sync_scale_and_layout(force_rebuild: bool) -> void:
 		_refresh_metrics()
 	elif _is_mobile and panel_container != null:
 		panel_container.anchor_top = 0.50 if portrait else 0.34
+	_syncing_layout = false
 
 func _process(delta: float) -> void:
 	if sim == null:

@@ -20,8 +20,8 @@ func _ready() -> void:
 	camera = Camera3D.new()
 	camera.name = "MainCamera"
 	camera.fov = 48.0
-	camera.near = 0.5
-	camera.far = 350.0
+	camera.near = 1.5
+	camera.far = 220.0
 	add_child(camera)
 	camera.current = true
 	_update_camera_transform()
