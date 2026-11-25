@@ -26,10 +26,11 @@ var phase_elapsed: float = 0.0
 var flash_timer: float = 0.0
 var flash_on: bool = true
 
-# Smart adaptive & emergency preemption state
+# Smart adaptive, emergency preemption, and roundabout state
 var _smart_ns_wait: int = 0
 var _smart_ew_wait: int = 0
 var _emergency_approach: int = -1 # -1 = none, 0..3 = approaching ambulance
+var is_roundabout: bool = false
 
 var lights: Array[TrafficLight] = []
 
@@ -49,22 +50,30 @@ func _create_lights() -> void:
 		lights.append(tl)
 	reposition_lights(7.0, 7.0)
 
+func set_roundabout_mode(enabled: bool) -> void:
+	is_roundabout = enabled
+	visible = not enabled
+
 func reposition_lights(ns_half: float, ew_half: float) -> void:
 	if lights.size() < 4:
 		return
-	var off_x := ns_half + 1.4
-	var off_z := ew_half + 1.4
+	var off_x := ns_half + 1.5
+	var off_z := ew_half + 1.5
 	lights[0].position = Vector3(-off_x, 0, off_z)
 	lights[0].rotation_degrees = Vector3(0, 0, 0)
+	lights[0].set_arm_reach(ns_half)
 
 	lights[1].position = Vector3(off_x, 0, -off_z)
 	lights[1].rotation_degrees = Vector3(0, 180, 0)
+	lights[1].set_arm_reach(ns_half)
 
 	lights[2].position = Vector3(-off_x, 0, -off_z)
 	lights[2].rotation_degrees = Vector3(0, -90, 0)
+	lights[2].set_arm_reach(ew_half)
 
 	lights[3].position = Vector3(off_x, 0, off_z)
 	lights[3].rotation_degrees = Vector3(0, 90, 0)
+	lights[3].set_arm_reach(ew_half)
 
 func set_mode(new_mode: SignalMode) -> void:
 	if mode == new_mode:
@@ -267,6 +276,11 @@ func is_unprotected_left(approach_idx: int, turn_type: int) -> bool:
 	return (mode == SignalMode.TWO_PHASE or mode == SignalMode.SMART_ADAPTIVE) and turn_type == TurnType.LEFT and get_signal_for(approach_idx, turn_type) == Aspect.GREEN
 
 func get_phase_label() -> String:
+	if is_roundabout:
+		if _emergency_approach >= 0:
+			return Lang.t("ph_roundabout_ems")
+		return Lang.t("ph_roundabout")
+
 	if _emergency_approach >= 0:
 		var dir_str := Lang.t("axis_ns") if (_emergency_approach == 0 or _emergency_approach == 1) else Lang.t("axis_ew")
 		return Lang.t("ph_emerg") % dir_str
@@ -309,7 +323,7 @@ func get_phase_label() -> String:
 	return "-"
 
 func get_time_remaining() -> float:
-	if _emergency_approach >= 0 or mode == SignalMode.ALL_RED or mode == SignalMode.FLASHING_YELLOW:
+	if is_roundabout or _emergency_approach >= 0 or mode == SignalMode.ALL_RED or mode == SignalMode.FLASHING_YELLOW:
 		return 0.0
 	return max(0.0, phase_timer)
 

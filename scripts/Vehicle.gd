@@ -91,6 +91,9 @@ var lane_idx: int = 0
 var turn_type: int = 0          # TrafficController.TurnType
 var kind: VehicleKind = VehicleKind.SEDAN
 var is_emergency: bool = false
+var is_roundabout: bool = false
+var ring_radius: float = 0.0
+var yield_world_pos: Vector3 = Vector3.ZERO
 
 var path_points: PackedVector3Array = PackedVector3Array()
 var path_cum_dist: PackedFloat32Array = PackedFloat32Array()
@@ -128,7 +131,9 @@ func setup(
 	p_stop_prog: float,
 	p_exit_prog: float,
 	p_kind: VehicleKind,
-	p_color: Color
+	p_color: Color,
+	p_is_roundabout: bool = false,
+	p_ring_radius: float = 0.0
 ) -> void:
 	_ensure_shared_mats()
 	approach_idx = p_approach
@@ -139,6 +144,8 @@ func setup(
 	exit_box_progress = p_exit_prog
 	kind = p_kind
 	is_emergency = (kind == VehicleKind.AMBULANCE)
+	is_roundabout = p_is_roundabout
+	ring_radius = p_ring_radius
 
 	match kind:
 		VehicleKind.SEDAN:
@@ -165,6 +172,8 @@ func setup(
 
 	speed = max_speed * 0.80
 	_bake_path()
+	var stop_sample := _sample_pos_and_dir(stop_progress)
+	yield_world_pos = stop_sample[0]
 	_build_mesh(p_color)
 	_apply_transform_at(0.0)
 
@@ -303,29 +312,37 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, all_vehicles: A
 
 	var target_speed := max_speed
 	var inside_intersection := (progress >= stop_progress - 2.0 and progress <= exit_box_progress)
-	if inside_intersection and turn_type != TrafficController.TurnType.STRAIGHT:
+	if is_roundabout and inside_intersection:
+		target_speed = min(target_speed, 13.0 if is_emergency else 10.5)
+	elif inside_intersection and turn_type != TrafficController.TurnType.STRAIGHT:
 		target_speed = min(target_speed, 7.6)
 
 	var must_stop_dist := 9999.0
 
-	# 1. Traffic signal check (only before crossing stop line)
+	# 1. Traffic signal OR Roundabout yield-on-entry check (only before crossing stop/yield line)
 	var dist_to_stop := stop_progress - (progress + vehicle_length * 0.52)
 	if dist_to_stop > -0.8 and progress < stop_progress:
-		var aspect := traffic_ctrl.get_signal_for(approach_idx, turn_type)
-		if aspect == TrafficController.Aspect.RED:
-			must_stop_dist = min(must_stop_dist, max(0.0, dist_to_stop))
-		elif aspect == TrafficController.Aspect.YELLOW:
-			var min_brake_dist := (speed * speed) / (2.0 * comfort_decel * 1.15)
-			if dist_to_stop > max(1.0, min_brake_dist * 0.75):
-				must_stop_dist = min(must_stop_dist, max(0.0, dist_to_stop))
-		elif aspect == TrafficController.Aspect.FLASHING_YELLOW:
+		if is_roundabout:
 			if dist_to_stop < 12.0:
-				target_speed = min(target_speed, 5.5)
-			if dist_to_stop < 5.0 and _has_conflicting_in_box(all_vehicles):
+				target_speed = min(target_speed, 9.5 if is_emergency else 7.8)
+			if dist_to_stop < 8.5 and _has_roundabout_conflict(all_vehicles):
 				must_stop_dist = min(must_stop_dist, max(0.0, dist_to_stop))
-		elif traffic_ctrl.is_unprotected_left(approach_idx, turn_type):
-			if dist_to_stop < 6.0 and _has_oncoming_straight(all_vehicles):
+		else:
+			var aspect := traffic_ctrl.get_signal_for(approach_idx, turn_type)
+			if aspect == TrafficController.Aspect.RED:
 				must_stop_dist = min(must_stop_dist, max(0.0, dist_to_stop))
+			elif aspect == TrafficController.Aspect.YELLOW:
+				var min_brake_dist := (speed * speed) / (2.0 * comfort_decel * 1.15)
+				if dist_to_stop > max(1.0, min_brake_dist * 0.75):
+					must_stop_dist = min(must_stop_dist, max(0.0, dist_to_stop))
+			elif aspect == TrafficController.Aspect.FLASHING_YELLOW:
+				if dist_to_stop < 12.0:
+					target_speed = min(target_speed, 5.5)
+				if dist_to_stop < 5.0 and _has_conflicting_in_box(all_vehicles):
+					must_stop_dist = min(must_stop_dist, max(0.0, dist_to_stop))
+			elif traffic_ctrl.is_unprotected_left(approach_idx, turn_type):
+				if dist_to_stop < 6.0 and _has_oncoming_straight(all_vehicles):
+					must_stop_dist = min(must_stop_dist, max(0.0, dist_to_stop))
 
 	# 2. Car-following & collision avoidance against other vehicles
 	var min_gap := 2.0
@@ -388,6 +405,30 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, all_vehicles: A
 		return
 
 	_apply_transform_at(progress)
+
+func _has_roundabout_conflict(all_vehicles: Array) -> bool:
+	for other in all_vehicles:
+		if other == self or other.finished:
+			continue
+		var other_v: SimVehicle = other
+		# Only yield to vehicles already circulating inside the roundabout ring
+		if other_v.progress < other_v.stop_progress - 1.5 or other_v.progress > other_v.exit_box_progress:
+			continue
+		if other_v.approach_idx == approach_idx and other_v.lane_idx == lane_idx:
+			continue
+		var to_entry := yield_world_pos - other_v.position
+		to_entry.y = 0.0
+		var dist := to_entry.length()
+		if dist > 12.5:
+			continue
+		var radial_diff := absf(other_v.ring_radius - ring_radius)
+		if radial_diff > 3.2 and dist > 5.5:
+			continue
+		if dist < 4.8:
+			return true
+		if other_v.forward.dot(to_entry / dist) > 0.38:
+			return true
+	return false
 
 func _has_conflicting_in_box(all_vehicles: Array) -> bool:
 	for other in all_vehicles:

@@ -2,7 +2,7 @@ extends Node3D
 class_name OrbitCamera
 
 const MIN_DIST: float = 18.0
-const MAX_DIST: float = 260.0
+const MAX_DIST: float = 360.0
 
 var camera: Camera3D
 
@@ -23,8 +23,8 @@ func _ready() -> void:
 	camera = Camera3D.new()
 	camera.name = "MainCamera"
 	camera.fov = 48.0
-	camera.near = 2.0
-	camera.far = 520.0
+	camera.near = 2.5
+	camera.far = 750.0
 	add_child(camera)
 	camera.current = true
 	_update_camera_transform()

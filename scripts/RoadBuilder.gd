@@ -2,17 +2,19 @@ extends Node3D
 class_name RoadBuilder
 
 const LANE_WIDTH: float = 3.5
-const ROAD_HALF_LEN: float = 68.0
+const ROAD_HALF_LEN: float = 115.0
 
 enum TimeOfDay { DAY, SUNSET, NIGHT }
+enum IntersectionType { SIGNALIZED, ROUNDABOUT }
 
 var dynamic_root: Node3D
 var env_built: bool = false
 var sun_light: DirectionalLight3D
 var world_env_node: WorldEnvironment
 var time_of_day: TimeOfDay = TimeOfDay.DAY
+var intersection_type: IntersectionType = IntersectionType.SIGNALIZED
 
-# Materials reused across rebuilds (never toggle emission_enabled at runtime!)
+# Materials reused across rebuilds
 var grass_mat: StandardMaterial3D
 var asphalt_mat: StandardMaterial3D
 var intersection_mat: StandardMaterial3D
@@ -25,12 +27,25 @@ var trunk_mat: StandardMaterial3D
 var foliage_mat: StandardMaterial3D
 var lamp_pole_mat: StandardMaterial3D
 var lamp_bulb_mat: StandardMaterial3D
+var monument_mat: StandardMaterial3D
 var building_mats: Array[StandardMaterial3D] = []
 
 # Congestion overlay bars (4 approaches: N, S, E, W)
 var congestion_bars: Array[MeshInstance3D] = []
 var congestion_mats: Array[StandardMaterial3D] = []
 var congestion_overlay_enabled: bool = true
+
+static func get_roundabout_radii(ns_lanes: int, ew_lanes: int) -> Dictionary:
+	var ring_lanes := clampi(maxi(ns_lanes, ew_lanes), 1, 10)
+	var island_r := maxf(6.5, 5.5 + float(ring_lanes) * 0.85)
+	var outer_r := island_r + float(ring_lanes) * LANE_WIDTH
+	var yield_dist := outer_r + 2.8
+	return {
+		"ring_lanes": ring_lanes,
+		"island_r": island_r,
+		"outer_r": outer_r,
+		"yield_dist": yield_dist
+	}
 
 func _ready() -> void:
 	_init_materials()
@@ -51,6 +66,7 @@ func _init_materials() -> void:
 	trunk_mat = _make_mat(Color(0.36, 0.24, 0.15), 0.9)
 	foliage_mat = _make_mat(Color(0.19, 0.45, 0.22), 0.85)
 	lamp_pole_mat = _make_mat(Color(0.25, 0.27, 0.32), 0.6)
+	monument_mat = _make_mat(Color(0.82, 0.84, 0.88), 0.4)
 
 	lamp_bulb_mat = StandardMaterial3D.new()
 	lamp_bulb_mat.albedo_color = Color(0.85, 0.82, 0.70)
@@ -96,7 +112,7 @@ func _setup_lighting_and_sky() -> void:
 	sun_light.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 	sun_light.shadow_bias = 0.12
 	sun_light.shadow_normal_bias = 1.8
-	sun_light.directional_shadow_max_distance = 180.0
+	sun_light.directional_shadow_max_distance = 220.0
 	add_child(sun_light)
 
 	world_env_node = WorldEnvironment.new()
@@ -150,51 +166,220 @@ func update_congestion(dir_wait_counts: Array[int]) -> void:
 		if not congestion_overlay_enabled:
 			continue
 		var w_cnt := dir_wait_counts[i]
-		var col := Color(0.14, 0.85, 0.42) # Smooth green
+		var col := Color(0.14, 0.85, 0.42)
 		if w_cnt >= 6:
-			col = Color(0.98, 0.22, 0.18)  # Heavy red
+			col = Color(0.98, 0.22, 0.18)
 		elif w_cnt >= 3:
-			col = Color(0.98, 0.74, 0.14)  # Moderate amber
+			col = Color(0.98, 0.74, 0.14)
 		var m := congestion_mats[i]
 		m.albedo_color = col
 		m.emission = col
 
-func rebuild(ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_enabled: Array[bool]) -> void:
+func rebuild(ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_enabled: Array[bool], itype: IntersectionType = IntersectionType.SIGNALIZED) -> void:
+	intersection_type = itype
 	if dynamic_root == null:
 		return
 	for c in dynamic_root.get_children():
 		c.queue_free()
 	congestion_bars.clear()
 
-	var ns_half: float = ns_lanes * LANE_WIDTH   # Half-width of N-S road along X
-	var ew_half: float = ew_lanes * LANE_WIDTH   # Half-width of E-W road along Z
+	# Ground base plane cleanly 0.25m below road surface (480x480 for wide 10-lane / roundabout zoom)
+	_add_box(Vector3(480, 0.4, 480), Vector3(0, -0.45, 0), grass_mat, false)
+
+	if itype == IntersectionType.ROUNDABOUT:
+		_build_roundabout_geometry(ns_lanes, ew_lanes, lane_enabled, approach_enabled)
+	else:
+		_build_signalized_geometry(ns_lanes, ew_lanes, lane_enabled, approach_enabled)
+
+func _build_signalized_geometry(ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_enabled: Array[bool]) -> void:
+	var ns_half: float = ns_lanes * LANE_WIDTH
+	var ew_half: float = ew_lanes * LANE_WIDTH
 	var ns_width: float = ns_half * 2.0
 	var ew_width: float = ew_half * 2.0
-	var stop_z: float = ew_half + 3.2            # Stop line Z for N/S approaches
-	var stop_x: float = ns_half + 3.2            # Stop line X for E/W approaches
+	var stop_z: float = ew_half + 3.2
+	var stop_x: float = ns_half + 3.2
 
 	var ns_arm_len: float = ROAD_HALF_LEN - ew_half
 	var ns_arm_center: float = ew_half + ns_arm_len * 0.5
 	var ew_arm_len: float = ROAD_HALF_LEN - ns_half
 	var ew_arm_center: float = ns_half + ew_arm_len * 0.5
 
-	# 1. Ground base plane cleanly 0.25m below road surface (large enough for wide/far camera zoom)
-	_add_box(Vector3(360, 0.4, 360), Vector3(0, -0.45, 0), grass_mat, false)
-
-	# 2. Non-overlapping Road Geometry (all tops cleanly at y = 0.0)
+	# Non-overlapping road geometry (all tops cleanly at y = 0.0)
 	_add_box(Vector3(ns_width, 0.20, ew_width), Vector3(0, -0.10, 0), intersection_mat, false)
-	# North & South arms
 	_add_box(Vector3(ns_width, 0.20, ns_arm_len), Vector3(0, -0.10, -ns_arm_center), asphalt_mat, false)
 	_add_box(Vector3(ns_width, 0.20, ns_arm_len), Vector3(0, -0.10, ns_arm_center), asphalt_mat, false)
-	# East & West arms
 	_add_box(Vector3(ew_arm_len, 0.20, ew_width), Vector3(ew_arm_center, -0.10, 0), asphalt_mat, false)
 	_add_box(Vector3(ew_arm_len, 0.20, ew_width), Vector3(-ew_arm_center, -0.10, 0), asphalt_mat, false)
 
-	# 3. Four corner urban blocks (adapted to asymmetric ns_half / ew_half)
-	var sw_x_in := ns_half + 0.02
-	var sw_z_in := ew_half + 0.02
-	var sw_w := ROAD_HALF_LEN - sw_x_in
-	var sw_d := ROAD_HALF_LEN - sw_z_in
+	_build_corner_blocks(ns_half, ew_half, ns_half, ew_half)
+	_build_arm_markings(ns_lanes, ew_lanes, ns_half, ew_half, stop_z, stop_x, ew_half + 1.55, ns_half + 1.55, false)
+	_build_congestion_bars(ns_half, ew_half, stop_z, stop_x)
+	_build_lane_cones(ns_lanes, ew_lanes, stop_z, stop_x, lane_enabled, approach_enabled)
+
+func _build_roundabout_geometry(ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_enabled: Array[bool]) -> void:
+	var ns_half: float = ns_lanes * LANE_WIDTH
+	var ew_half: float = ew_lanes * LANE_WIDTH
+	var rinfo := get_roundabout_radii(ns_lanes, ew_lanes)
+	var ring_lanes: int = rinfo["ring_lanes"]
+	var island_r: float = rinfo["island_r"]
+	var outer_r: float = rinfo["outer_r"]
+	var yield_dist: float = rinfo["yield_dist"]
+
+	# 1. Circulatory asphalt disk (top at y = 0.0, zero overlap with arms!)
+	var disk := MeshInstance3D.new()
+	var dm := CylinderMesh.new()
+	dm.top_radius = outer_r
+	dm.bottom_radius = outer_r
+	dm.height = 0.20
+	dm.radial_segments = 64
+	disk.mesh = dm
+	disk.material_override = intersection_mat
+	disk.position = Vector3(0, -0.10, 0)
+	disk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	dynamic_root.add_child(disk)
+
+	# 2. 4 Exact Non-Overlapping Road Arms meeting the circular rim smoothly at y = 0.0
+	_add_roundabout_arm_mesh(ns_half, outer_r, true, -1.0)  # North (-Z)
+	_add_roundabout_arm_mesh(ns_half, outer_r, true, 1.0)   # South (+Z)
+	_add_roundabout_arm_mesh(ew_half, outer_r, false, 1.0)  # East (+X)
+	_add_roundabout_arm_mesh(ew_half, outer_r, false, -1.0) # West (-X)
+
+	# 3. Central Landscaped Island (curb + grass + monument + trees)
+	var curb := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = island_r
+	cm.bottom_radius = island_r + 0.15
+	cm.height = 0.28
+	cm.radial_segments = 48
+	curb.mesh = cm
+	curb.material_override = sidewalk_mat
+	curb.position = Vector3(0, 0.14, 0)
+	curb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	dynamic_root.add_child(curb)
+
+	var grass_top := MeshInstance3D.new()
+	var gm := CylinderMesh.new()
+	gm.top_radius = maxf(2.0, island_r - 0.65)
+	gm.bottom_radius = maxf(2.2, island_r - 0.55)
+	gm.height = 0.16
+	gm.radial_segments = 48
+	grass_top.mesh = gm
+	grass_top.material_override = grass_mat
+	grass_top.position = Vector3(0, 0.36, 0)
+	grass_top.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	dynamic_root.add_child(grass_top)
+
+	# Central plaza monument
+	var ped := MeshInstance3D.new()
+	var ped_m := CylinderMesh.new()
+	ped_m.top_radius = 1.6
+	ped_m.bottom_radius = 2.2
+	ped_m.height = 0.8
+	ped.mesh = ped_m
+	ped.material_override = monument_mat
+	ped.position = Vector3(0, 0.84, 0)
+	dynamic_root.add_child(ped)
+
+	var obelisk := MeshInstance3D.new()
+	var ob_m := CylinderMesh.new()
+	ob_m.top_radius = 0.25
+	ob_m.bottom_radius = 0.85
+	ob_m.height = 5.4
+	obelisk.mesh = ob_m
+	obelisk.material_override = monument_mat
+	obelisk.position = Vector3(0, 3.85, 0)
+	dynamic_root.add_child(obelisk)
+
+	# Ring of trees on the central island
+	var tree_ring_r := island_r - 2.6
+	if tree_ring_r >= 3.0:
+		var tree_cnt := clampi(int(tree_ring_r * 0.9), 4, 12)
+		for i in range(tree_cnt):
+			var ang := TAU * float(i) / float(tree_cnt)
+			_add_tree(Vector3(cos(ang) * tree_ring_r, 0.44, sin(ang) * tree_ring_r))
+
+	# 4. Dashed Circular Lane Lines inside the Roundabout (y = 0.05)
+	for l in range(1, ring_lanes):
+		var lr := island_r + float(l) * LANE_WIDTH
+		var circ := TAU * lr
+		var dash_cnt := maxi(12, int(circ / 5.5))
+		for d in range(dash_cnt):
+			var a := TAU * float(d) / float(dash_cnt)
+			var pos := Vector3(cos(a) * lr, 0.05, sin(a) * lr)
+			var mi := MeshInstance3D.new()
+			var pm := PlaneMesh.new()
+			pm.size = Vector2(0.16, 2.4)
+			mi.mesh = pm
+			mi.material_override = white_line_mat
+			mi.position = pos
+			mi.rotation.y = -a
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			dynamic_root.add_child(mi)
+
+	# 5. Corner urban blocks pushed cleanly outside the roundabout circle!
+	var block_offset := maxf(outer_r + 1.5, maxf(ns_half, ew_half) + 1.5)
+	_build_corner_blocks(block_offset, block_offset, ns_half, ew_half)
+
+	# 6. Arm lane lines, yield lines, crosswalks, congestion bars, cones
+	_build_arm_markings(ns_lanes, ew_lanes, ns_half, ew_half, yield_dist, yield_dist, yield_dist + 2.4, yield_dist + 2.4, true)
+	_build_congestion_bars(ns_half, ew_half, yield_dist + 3.8, yield_dist + 3.8)
+	_build_lane_cones(ns_lanes, ew_lanes, yield_dist + 1.5, yield_dist + 1.5, lane_enabled, approach_enabled)
+
+func _add_roundabout_arm_mesh(half_w: float, outer_r: float, along_z: bool, dir_sign: float) -> void:
+	# Builds a flat, exact-fit quad strip from the roundabout circle rim to ROAD_HALF_LEN at y = 0.0
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var slices := 18
+	for i in range(slices):
+		var u0 := lerpf(-half_w, half_w, float(i) / float(slices))
+		var u1 := lerpf(-half_w, half_w, float(i + 1) / float(slices))
+		var r0 := sqrt(maxf(0.01, outer_r * outer_r - u0 * u0))
+		var r1 := sqrt(maxf(0.01, outer_r * outer_r - u1 * u1))
+
+		var p0: Vector3
+		var p1: Vector3
+		var p2: Vector3
+		var p3: Vector3
+		if along_z:
+			p0 = Vector3(u0, 0.0, dir_sign * r0)
+			p1 = Vector3(u1, 0.0, dir_sign * r1)
+			p2 = Vector3(u1, 0.0, dir_sign * ROAD_HALF_LEN)
+			p3 = Vector3(u0, 0.0, dir_sign * ROAD_HALF_LEN)
+		else:
+			p0 = Vector3(dir_sign * r0, 0.0, u0)
+			p1 = Vector3(dir_sign * r1, 0.0, u1)
+			p2 = Vector3(dir_sign * ROAD_HALF_LEN, 0.0, u1)
+			p3 = Vector3(dir_sign * ROAD_HALF_LEN, 0.0, u0)
+
+		# Ensure upward (+Y) face winding regardless of arm direction
+		var n := (p1 - p0).cross(p2 - p0)
+		st.set_normal(Vector3.UP)
+		if n.y >= 0.0:
+			st.add_vertex(p0)
+			st.add_vertex(p1)
+			st.add_vertex(p2)
+			st.add_vertex(p0)
+			st.add_vertex(p2)
+			st.add_vertex(p3)
+		else:
+			st.add_vertex(p0)
+			st.add_vertex(p2)
+			st.add_vertex(p1)
+			st.add_vertex(p0)
+			st.add_vertex(p3)
+			st.add_vertex(p2)
+
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = asphalt_mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	dynamic_root.add_child(mi)
+
+func _build_corner_blocks(x_in: float, z_in: float, _ns_half: float, _ew_half: float) -> void:
+	var sw_x_in := x_in + 0.04
+	var sw_z_in := z_in + 0.04
+	var sw_w := maxf(6.0, ROAD_HALF_LEN - sw_x_in)
+	var sw_d := maxf(6.0, ROAD_HALF_LEN - sw_z_in)
 	var sw_cx := sw_x_in + sw_w * 0.5
 	var sw_cz := sw_z_in + sw_d * 0.5
 	var corners := [
@@ -205,16 +390,14 @@ func rebuild(ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_e
 	]
 	for idx in range(4):
 		var s: Vector2 = corners[idx]
-		# Sidewalk slab (bottom = -0.10, top = +0.20)
 		_add_box(
 			Vector3(sw_w, 0.30, sw_d),
 			Vector3(s.x * sw_cx, 0.05, s.y * sw_cz),
 			sidewalk_mat,
 			false
 		)
-		# Inner grass park sits cleanly ON TOP of sidewalk (top = +0.32)
-		var px_in := ns_half + 3.8
-		var pz_in := ew_half + 3.8
+		var px_in := x_in + 3.8
+		var pz_in := z_in + 3.8
 		var pw := ROAD_HALF_LEN - px_in - 1.0
 		var pd := ROAD_HALF_LEN - pz_in - 1.0
 		if pw > 4.0 and pd > 4.0:
@@ -225,40 +408,43 @@ func rebuild(ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_e
 				false
 			)
 
-		# Corner street lamp (lights up during sunset/night)
-		_add_street_lamp(Vector3(s.x * (ns_half + 2.6), 0.20, s.y * (ew_half + 2.6)), s)
+		_add_street_lamp(Vector3(s.x * (x_in + 2.6), 0.20, s.y * (z_in + 2.6)), s)
 
-		# Stylized low-poly buildings
-		var bx := ns_half + 11.0
-		var bz := ew_half + 11.0
-		var heights := [11.0, 16.0, 8.5, 14.0]
-		_add_building(
-			Vector3(s.x * (bx + 3.5), 0.32, s.y * (bz + 3.5)),
-			Vector3(10.0, heights[idx], 10.0),
-			building_mats[idx % building_mats.size()]
-		)
-		_add_building(
-			Vector3(s.x * (bx + 18.0), 0.32, s.y * (bz + 4.5)),
-			Vector3(11.0, heights[(idx + 2) % 4] * 0.85, 9.0),
-			building_mats[(idx + 1) % building_mats.size()]
-		)
-		_add_building(
-			Vector3(s.x * (bx + 4.5), 0.32, s.y * (bz + 18.0)),
-			Vector3(9.0, heights[(idx + 1) % 4] * 0.9, 11.0),
-			building_mats[(idx + 3) % building_mats.size()]
-		)
+		var bx := x_in + 10.5
+		var bz := z_in + 10.5
+		var heights := [12.0, 17.0, 9.5, 15.0]
+		if bx + 8.0 < ROAD_HALF_LEN and bz + 8.0 < ROAD_HALF_LEN:
+			_add_building(
+				Vector3(s.x * (bx + 3.5), 0.32, s.y * (bz + 3.5)),
+				Vector3(10.0, heights[idx], 10.0),
+				building_mats[idx % building_mats.size()]
+			)
+		if bx + 22.0 < ROAD_HALF_LEN and bz + 9.0 < ROAD_HALF_LEN:
+			_add_building(
+				Vector3(s.x * (bx + 18.0), 0.32, s.y * (bz + 4.5)),
+				Vector3(11.0, heights[(idx + 2) % 4] * 0.85, 9.0),
+				building_mats[(idx + 1) % building_mats.size()]
+			)
+		if bx + 9.0 < ROAD_HALF_LEN and bz + 22.0 < ROAD_HALF_LEN:
+			_add_building(
+				Vector3(s.x * (bx + 4.5), 0.32, s.y * (bz + 18.0)),
+				Vector3(9.0, heights[(idx + 1) % 4] * 0.9, 11.0),
+				building_mats[(idx + 3) % building_mats.size()]
+			)
 
-		# Corner trees
-		_add_tree(Vector3(s.x * (ns_half + 5.6), 0.32, s.y * (ew_half + 5.6)))
-		_add_tree(Vector3(s.x * (ns_half + 6.0), 0.32, s.y * (ew_half + 16.0)))
-		_add_tree(Vector3(s.x * (ns_half + 16.0), 0.32, s.y * (ew_half + 6.0)))
+		if x_in + 6.0 < ROAD_HALF_LEN and z_in + 6.0 < ROAD_HALF_LEN:
+			_add_tree(Vector3(s.x * (x_in + 5.6), 0.32, s.y * (z_in + 5.6)))
+		if x_in + 16.0 < ROAD_HALF_LEN and z_in + 6.0 < ROAD_HALF_LEN:
+			_add_tree(Vector3(s.x * (x_in + 16.0), 0.32, s.y * (z_in + 6.0)))
+		if x_in + 6.0 < ROAD_HALF_LEN and z_in + 16.0 < ROAD_HALF_LEN:
+			_add_tree(Vector3(s.x * (x_in + 6.0), 0.32, s.y * (z_in + 16.0)))
 
-	# 4. Road Markings at y = +0.05 (zero Z-fighting)
+func _build_arm_markings(ns_lanes: int, ew_lanes: int, ns_half: float, ew_half: float, stop_z: float, stop_x: float, cw_z_dist: float, cw_x_dist: float, is_yield: bool) -> void:
 	var mark_y: float = 0.05
 
-	# N-S arms (North = -Z, South = +Z)
-	var ns_mark_start := stop_z + 0.3
-	var ns_mark_len := ROAD_HALF_LEN - ns_mark_start
+	# N-S arms
+	var ns_mark_start := (cw_z_dist + 1.5) if is_yield else (stop_z + 0.3)
+	var ns_mark_len := maxf(2.0, ROAD_HALF_LEN - ns_mark_start)
 	var ns_mark_mid := ns_mark_start + ns_mark_len * 0.5
 	for sign_z in [-1.0, 1.0]:
 		var sz: float = float(sign_z)
@@ -274,21 +460,28 @@ func rebuild(ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_e
 				z_pos += 6.0
 
 		var incoming_x_sign: float = sz
-		_add_marking(
-			Vector2(ns_half - 0.3, 0.45),
-			Vector3(incoming_x_sign * (ns_half * 0.5), mark_y, sz * stop_z),
-			white_line_mat
-		)
+		if is_yield:
+			# Dashed yield line across incoming lanes
+			var sx_pos := 0.7
+			while sx_pos < ns_half - 0.5:
+				_add_marking(Vector2(0.85, 0.50), Vector3(incoming_x_sign * sx_pos, mark_y, sz * stop_z), white_line_mat)
+				sx_pos += 1.65
+		else:
+			_add_marking(
+				Vector2(ns_half - 0.3, 0.45),
+				Vector3(incoming_x_sign * (ns_half * 0.5), mark_y, sz * stop_z),
+				white_line_mat
+			)
 
-		var cw_z: float = sz * (ew_half + 1.55)
+		var cw_z: float = sz * cw_z_dist
 		var stripe_x := -ns_half + 0.9
 		while stripe_x <= ns_half - 0.8:
-			_add_marking(Vector2(0.75, 2.1), Vector3(stripe_x, mark_y, cw_z), white_line_mat)
+			_add_marking(Vector2(0.75, 2.0), Vector3(stripe_x, mark_y, cw_z), white_line_mat)
 			stripe_x += 1.75
 
-	# E-W arms (East = +X, West = -X)
-	var ew_mark_start := stop_x + 0.3
-	var ew_mark_len := ROAD_HALF_LEN - ew_mark_start
+	# E-W arms
+	var ew_mark_start := (cw_x_dist + 1.5) if is_yield else (stop_x + 0.3)
+	var ew_mark_len := maxf(2.0, ROAD_HALF_LEN - ew_mark_start)
 	var ew_mark_mid := ew_mark_start + ew_mark_len * 0.5
 	for sign_x in [-1.0, 1.0]:
 		var sx: float = float(sign_x)
@@ -304,31 +497,33 @@ func rebuild(ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_e
 				x_pos += 6.0
 
 		var incoming_z_sign: float = -sx
-		_add_marking(
-			Vector2(0.45, ew_half - 0.3),
-			Vector3(sx * stop_x, mark_y, incoming_z_sign * (ew_half * 0.5)),
-			white_line_mat
-		)
+		if is_yield:
+			var sz_pos := 0.7
+			while sz_pos < ew_half - 0.5:
+				_add_marking(Vector2(0.50, 0.85), Vector3(sx * stop_x, mark_y, incoming_z_sign * sz_pos), white_line_mat)
+				sz_pos += 1.65
+		else:
+			_add_marking(
+				Vector2(0.45, ew_half - 0.3),
+				Vector3(sx * stop_x, mark_y, incoming_z_sign * (ew_half * 0.5)),
+				white_line_mat
+			)
 
-		var cw_x: float = sx * (ns_half + 1.55)
+		var cw_x: float = sx * cw_x_dist
 		var stripe_z := -ew_half + 0.9
 		while stripe_z <= ew_half - 0.8:
-			_add_marking(Vector2(2.1, 0.75), Vector3(cw_x, mark_y, stripe_z), white_line_mat)
+			_add_marking(Vector2(2.0, 0.75), Vector3(cw_x, mark_y, stripe_z), white_line_mat)
 			stripe_z += 1.75
 
-	# 5. Congestion Status Strips (on sidewalk curb next to each incoming approach, index 0=N, 1=S, 2=E, 3=W)
-	var strip_len := 18.0
+func _build_congestion_bars(ns_half: float, ew_half: float, start_z: float, start_x: float) -> void:
+	var strip_len := 22.0
 	var strip_y := 0.24
-	# North incoming is -X, -Z
-	congestion_bars.append(_add_congestion_bar(Vector3(0.55, 0.08, strip_len), Vector3(-(ns_half + 0.75), strip_y, -(stop_z + strip_len * 0.5 + 1.0)), congestion_mats[0]))
-	# South incoming is +X, +Z
-	congestion_bars.append(_add_congestion_bar(Vector3(0.55, 0.08, strip_len), Vector3(ns_half + 0.75, strip_y, stop_z + strip_len * 0.5 + 1.0), congestion_mats[1]))
-	# East incoming is +X, -Z
-	congestion_bars.append(_add_congestion_bar(Vector3(strip_len, 0.08, 0.55), Vector3(stop_x + strip_len * 0.5 + 1.0, strip_y, -(ew_half + 0.75)), congestion_mats[2]))
-	# West incoming is -X, +Z
-	congestion_bars.append(_add_congestion_bar(Vector3(strip_len, 0.08, 0.55), Vector3(-(stop_x + strip_len * 0.5 + 1.0), strip_y, ew_half + 0.75), congestion_mats[3]))
+	congestion_bars.append(_add_congestion_bar(Vector3(0.65, 0.08, strip_len), Vector3(-(ns_half + 0.85), strip_y, -(start_z + strip_len * 0.5 + 1.0)), congestion_mats[0]))
+	congestion_bars.append(_add_congestion_bar(Vector3(0.65, 0.08, strip_len), Vector3(ns_half + 0.85, strip_y, start_z + strip_len * 0.5 + 1.0), congestion_mats[1]))
+	congestion_bars.append(_add_congestion_bar(Vector3(strip_len, 0.08, 0.65), Vector3(start_x + strip_len * 0.5 + 1.0, strip_y, -(ew_half + 0.85)), congestion_mats[2]))
+	congestion_bars.append(_add_congestion_bar(Vector3(strip_len, 0.08, 0.65), Vector3(-(start_x + strip_len * 0.5 + 1.0), strip_y, ew_half + 0.85), congestion_mats[3]))
 
-	# 6. Traffic Cones for closed lanes or disabled approaches
+func _build_lane_cones(ns_lanes: int, ew_lanes: int, stop_z: float, stop_x: float, lane_enabled: Array[bool], approach_enabled: Array[bool]) -> void:
 	var forwards := [Vector3(0, 0, 1), Vector3(0, 0, -1), Vector3(-1, 0, 0), Vector3(1, 0, 0)]
 	var rights := [Vector3(-1, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 0, 1)]
 	for a in range(4):

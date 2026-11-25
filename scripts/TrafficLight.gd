@@ -9,6 +9,8 @@ var green_mat: StandardMaterial3D
 var left_mat: StandardMaterial3D
 
 var _pole_built: bool = false
+var _arm_node: MeshInstance3D
+var _housing_root: Node3D
 
 func _ready() -> void:
 	if not _pole_built:
@@ -28,71 +30,74 @@ func _build_mesh() -> void:
 	# Vertical pole
 	var pole := MeshInstance3D.new()
 	var pole_mesh := CylinderMesh.new()
-	pole_mesh.top_radius = 0.14
-	pole_mesh.bottom_radius = 0.18
-	pole_mesh.height = 6.2
+	pole_mesh.top_radius = 0.16
+	pole_mesh.bottom_radius = 0.22
+	pole_mesh.height = 6.6
 	pole.mesh = pole_mesh
 	pole.material_override = pole_mat
-	pole.position = Vector3(0, 3.1, 0)
+	pole.position = Vector3(0, 3.3, 0)
 	add_child(pole)
 
-	# Horizontal cantilever arm reaching over the road (+X in local space)
-	var arm := MeshInstance3D.new()
+	# Horizontal cantilever arm reaching over the lanes (+X in local space)
+	_arm_node = MeshInstance3D.new()
 	var arm_mesh := CylinderMesh.new()
-	arm_mesh.top_radius = 0.10
-	arm_mesh.bottom_radius = 0.12
-	arm_mesh.height = 4.2
-	arm.mesh = arm_mesh
-	arm.material_override = pole_mat
-	arm.rotation_degrees = Vector3(0, 0, 90)
-	arm.position = Vector3(2.0, 5.9, 0)
-	add_child(arm)
+	arm_mesh.top_radius = 0.11
+	arm_mesh.bottom_radius = 0.13
+	arm_mesh.height = 4.6
+	_arm_node.mesh = arm_mesh
+	_arm_node.material_override = pole_mat
+	_arm_node.rotation_degrees = Vector3(0, 0, 90)
+	_arm_node.position = Vector3(2.3, 6.2, 0)
+	add_child(_arm_node)
 
-	# Signal housing box hanging on the arm (faces -Z in local space toward approaching cars)
+	# Signal housing assembly (moved outward when road has many lanes)
+	_housing_root = Node3D.new()
+	_housing_root.position = Vector3(3.0, 5.8, 0)
+	add_child(_housing_root)
+
 	var housing := MeshInstance3D.new()
 	var box_mesh := BoxMesh.new()
-	box_mesh.size = Vector3(2.7, 0.85, 0.45)
+	box_mesh.size = Vector3(2.9, 0.90, 0.48)
 	housing.mesh = box_mesh
 	housing.material_override = housing_mat
-	housing.position = Vector3(2.8, 5.55, 0)
-	add_child(housing)
+	_housing_root.add_child(housing)
 
-	# 4 Signal bulbs: Red, Yellow, Left-Arrow, Green (arranged left-to-right facing approaching cars)
 	red_mat = _create_bulb_mat(Color(0.2, 0.04, 0.04))
 	yellow_mat = _create_bulb_mat(Color(0.22, 0.18, 0.03))
 	left_mat = _create_bulb_mat(Color(0.03, 0.18, 0.12))
 	green_mat = _create_bulb_mat(Color(0.03, 0.2, 0.06))
 
-	var offsets := [-0.95, -0.32, 0.32, 0.95]
+	var offsets := [-1.02, -0.34, 0.34, 1.02]
 	var mats := [red_mat, yellow_mat, left_mat, green_mat]
 
 	for i in range(4):
-		var bulb := MeshInstance3D.new()
 		var sphere := SphereMesh.new()
-		sphere.radius = 0.24
-		sphere.height = 0.48
+		sphere.radius = 0.26
+		sphere.height = 0.52
+
+		var bulb := MeshInstance3D.new()
 		bulb.mesh = sphere
 		bulb.material_override = mats[i]
-		# Place on BOTH front and back slightly protruding so visible from all camera angles
-		bulb.position = Vector3(2.8 + offsets[i], 5.55, -0.18)
+		bulb.position = Vector3(offsets[i], 0.0, -0.20)
 		bulb.scale = Vector3(1.0, 1.0, 0.55)
-		add_child(bulb)
+		_housing_root.add_child(bulb)
 
 		var bulb_back := MeshInstance3D.new()
 		bulb_back.mesh = sphere
 		bulb_back.material_override = mats[i]
-		bulb_back.position = Vector3(2.8 + offsets[i], 5.55, 0.18)
+		bulb_back.position = Vector3(offsets[i], 0.0, 0.20)
 		bulb_back.scale = Vector3(1.0, 1.0, 0.55)
-		add_child(bulb_back)
+		_housing_root.add_child(bulb_back)
 
-	# Secondary vertical beacon at top of pole for easy top-down visibility
-	var top_housing := MeshInstance3D.new()
-	var top_box := BoxMesh.new()
-	top_box.size = Vector3(0.55, 0.55, 0.55)
-	top_housing.mesh = top_box
-	top_housing.material_override = housing_mat
-	top_housing.position = Vector3(0, 6.45, 0)
-	add_child(top_housing)
+func set_arm_reach(road_half: float) -> void:
+	if not _pole_built:
+		_build_mesh()
+	var reach := clampf(road_half * 0.55 + 1.6, 3.8, 16.0)
+	var arm_mesh := _arm_node.mesh as CylinderMesh
+	if arm_mesh:
+		arm_mesh.height = reach + 1.4
+	_arm_node.position = Vector3((reach + 1.4) * 0.5, 6.2, 0)
+	_housing_root.position = Vector3(reach, 5.8, 0)
 
 func _create_bulb_mat(base_color: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()

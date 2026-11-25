@@ -30,16 +30,23 @@ const STRINGS: Dictionary = {
 		# Section headers
 		"sec_presets": "Presets & Emergency",
 		"sec_sim_cam": "Simulation · Camera · Lighting",
-		"sec_lanes": "Lanes (Asymmetric · Live)",
+		"sec_lanes": "Intersection Type & Lanes (1–10)",
 		"sec_traffic": "Traffic Volume & Turn Mix",
 		"sec_signals": "Traffic Signals & AI Adaptive",
+
+		# Intersection Types
+		"type_lbl": "Type:",
+		"type_signal": "4-Way Signal",
+		"type_roundabout": "Roundabout",
 
 		# Scenarios & Ambulance
 		"btn_ambulance": "🚑 Dispatch Ambulance (Preempt)",
 		"preset_normal": "Balanced",
 		"preset_rush": "Rush Hour (AI)",
-		"preset_left": "Heavy Left Turn",
+		"preset_left": "Heavy Left",
 		"preset_const": "Lane Closure",
+		"preset_roundabout": "Roundabout",
+		"preset_mega10": "10-Lane Mega",
 
 		# Simulation & Camera & Lighting
 		"pause": "Pause",
@@ -58,15 +65,14 @@ const STRINGS: Dictionary = {
 		"touch_tip": "Tip: 1-finger drag (orbit) · 2-finger pinch (zoom)",
 		"desktop_hint": "Drag: Orbit | Scroll: Zoom",
 
-		# Lanes
-		"ns_lanes": "N-S Lanes:",
-		"ew_lanes": "E-W Lanes:",
-		"lane_n": "%d Lane",
-		"lane_n_pl": "%d Lanes",
-		"lane_open_lbl": "Open Lanes (uncheck to place cones):",
-		"lane_1": "Lane 1 (In)",
+		# Lanes (1 to 10)
+		"ns_lanes": "N-S Lanes (each way)",
+		"ew_lanes": "E-W Lanes (each way)",
+		"lane_unit": " lanes",
+		"lane_open_lbl": "Inner Lanes Open (uncheck to place cones):",
+		"lane_1": "Lane 1",
 		"lane_2": "Lane 2",
-		"lane_3": "Lane 3 (Out)",
+		"lane_3": "Lane 3",
 		"approach_lbl": "Entry:",
 		"dir_n": "N",
 		"dir_s": "S",
@@ -83,6 +89,7 @@ const STRINGS: Dictionary = {
 		"ratio_right": "Right Turn Ratio",
 
 		# Signals
+		"sig_disabled_rotary": "Roundabout active (unsignalized yield-on-entry)",
 		"mode_2p": "2-Phase (N-S / E-W)",
 		"mode_4p": "4-Phase (Protected Left)",
 		"mode_ai": "Smart Adaptive (AI Queue)",
@@ -107,6 +114,8 @@ const STRINGS: Dictionary = {
 		# Signal Phase Labels
 		"axis_ns": "N-S",
 		"axis_ew": "E-W",
+		"ph_roundabout": "Roundabout (Yield on Entry)",
+		"ph_roundabout_ems": "🚑 Roundabout — EMS Priority",
 		"ph_emerg": "🚑 Emergency Preempt (%s)",
 		"ph_all_red": "All Red (Emergency Stop)",
 		"ph_flash": "Flashing Yellow (Yield)",
@@ -153,9 +162,14 @@ const STRINGS: Dictionary = {
 		# Section headers
 		"sec_presets": "시나리오 프리셋 & 긴급출동",
 		"sec_sim_cam": "시뮬레이션 · 카메라 · 시간대",
-		"sec_lanes": "차선 설정 (비대칭·실시간 반영)",
+		"sec_lanes": "교차로 형태 & 차선 (1~10차선)",
 		"sec_traffic": "트래픽 양 & 회전 비율",
 		"sec_signals": "신호등 제어 & AI 감응",
+
+		# Intersection Types
+		"type_lbl": "형태:",
+		"type_signal": "신호 교차로",
+		"type_roundabout": "로터리 (회전)",
 
 		# Scenarios & Ambulance
 		"btn_ambulance": "🚑 구급차 긴급 출동 (우선신호)",
@@ -163,6 +177,8 @@ const STRINGS: Dictionary = {
 		"preset_rush": "출근 러시(AI)",
 		"preset_left": "좌회전 정체",
 		"preset_const": "1차선 공사",
+		"preset_roundabout": "로터리 회전",
+		"preset_mega10": "10차선 대로",
 
 		# Simulation & Camera & Lighting
 		"pause": "일시정지",
@@ -181,15 +197,14 @@ const STRINGS: Dictionary = {
 		"touch_tip": "팁: 한 손가락 드래그(회전) · 두 손가락 핀치(확대/축소)",
 		"desktop_hint": "마우스 드래그: 회전 | 휠: 확대/축소",
 
-		# Lanes
-		"ns_lanes": "남북 차선:",
-		"ew_lanes": "동서 차선:",
-		"lane_n": "%d차선",
-		"lane_n_pl": "%d차선",
-		"lane_open_lbl": "개별 차선 개방 (해제 시 공사 라바콘 배치):",
-		"lane_1": "1차선(내)",
+		# Lanes (1 to 10)
+		"ns_lanes": "남북 차선 (편도)",
+		"ew_lanes": "동서 차선 (편도)",
+		"lane_unit": "차선",
+		"lane_open_lbl": "내측 차선 개방 (해제 시 공사 라바콘):",
+		"lane_1": "1차선",
 		"lane_2": "2차선",
-		"lane_3": "3차선(외)",
+		"lane_3": "3차선",
 		"approach_lbl": "진입:",
 		"dir_n": "북",
 		"dir_s": "남",
@@ -206,6 +221,7 @@ const STRINGS: Dictionary = {
 		"ratio_right": "우회전 비율",
 
 		# Signals
+		"sig_disabled_rotary": "로터리 모드 활성화 중 (무신호 회전 우선 양보)",
 		"mode_2p": "2현시 (남북/동서 교대)",
 		"mode_4p": "4현시 (좌회전 보호 신호)",
 		"mode_ai": "스마트 감응 (AI 대기열 자동 제어)",
@@ -230,6 +246,8 @@ const STRINGS: Dictionary = {
 		# Signal Phase Labels
 		"axis_ns": "남북",
 		"axis_ew": "동서",
+		"ph_roundabout": "로터리 회전교차로 (회전차량 우선)",
+		"ph_roundabout_ems": "🚑 로터리 — 구급차 통과 중",
 		"ph_emerg": "🚑 긴급 우선신호 (%s 통과)",
 		"ph_all_red": "전체 적색 (긴급 정지)",
 		"ph_flash": "황색 점멸 (주의 서행)",

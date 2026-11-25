@@ -667,6 +667,24 @@ func _populate_scenario_controls(parent: VBoxContainer, touch: bool) -> void:
 	p_const.pressed.connect(func(): _apply_preset_and_sync("construction"))
 	row2.add_child(p_const)
 
+	var row3 := HBoxContainer.new()
+	row3.add_theme_constant_override("separation", 5)
+	parent.add_child(row3)
+
+	var p_rotary := Button.new()
+	p_rotary.text = Lang.t("preset_roundabout")
+	p_rotary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(p_rotary, sim.intersection_type == RoadBuilder.IntersectionType.ROUNDABOUT, btn_h, fsz)
+	p_rotary.pressed.connect(func(): _apply_preset_and_sync("roundabout"))
+	row3.add_child(p_rotary)
+
+	var p_mega := Button.new()
+	p_mega.text = Lang.t("preset_mega10")
+	p_mega.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(p_mega, false, btn_h, fsz)
+	p_mega.pressed.connect(func(): _apply_preset_and_sync("mega10"))
+	row3.add_child(p_mega)
+
 func _populate_sim_camera_controls(parent: VBoxContainer, touch: bool) -> void:
 	var btn_h := 42 if touch else 30
 	var fsz := 14 if touch else 12
@@ -812,59 +830,52 @@ func _refresh_time_button_styles(btn_h: int, fsz: int) -> void:
 	for i in range(min(time_btns.size(), tod_modes.size())):
 		_style_button(time_btns[i], sim.road_builder.time_of_day == tod_modes[i], btn_h, fsz)
 
-func _lane_btn_label(cnt: int) -> String:
-	return (Lang.t("lane_n") if cnt == 1 else Lang.t("lane_n_pl")) % cnt
-
 func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 	var btn_h := 42 if touch else 30
 	var fsz := 14 if touch else 12
 	var cb_fsz := 14 if touch else 12
 
-	var ns_row := HBoxContainer.new()
-	ns_row.add_theme_constant_override("separation", 5)
-	parent.add_child(ns_row)
-	var ns_lbl := Label.new()
-	ns_lbl.text = Lang.t("ns_lanes")
-	ns_lbl.add_theme_font_size_override("font_size", fsz)
-	ns_row.add_child(ns_lbl)
+	# Intersection Type Toggle (4-Way Signal vs Roundabout)
+	var type_row := HBoxContainer.new()
+	type_row.add_theme_constant_override("separation", 5)
+	parent.add_child(type_row)
+	var type_lbl := Label.new()
+	type_lbl.text = Lang.t("type_lbl")
+	type_lbl.add_theme_font_size_override("font_size", fsz)
+	type_row.add_child(type_lbl)
 
+	var is_rotary := (sim.intersection_type == RoadBuilder.IntersectionType.ROUNDABOUT)
+	var btn_sig := Button.new()
+	btn_sig.text = Lang.t("type_signal")
+	btn_sig.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(btn_sig, not is_rotary, btn_h, fsz)
+	btn_sig.pressed.connect(func():
+		sim.set_intersection_type(RoadBuilder.IntersectionType.SIGNALIZED)
+		_sync_scale_and_layout(true)
+	)
+	type_row.add_child(btn_sig)
+
+	var btn_rot := Button.new()
+	btn_rot.text = Lang.t("type_roundabout")
+	btn_rot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(btn_rot, is_rotary, btn_h, fsz)
+	btn_rot.pressed.connect(func():
+		sim.set_intersection_type(RoadBuilder.IntersectionType.ROUNDABOUT)
+		_sync_scale_and_layout(true)
+	)
+	type_row.add_child(btn_rot)
+
+	# 1..10 Lanes per Direction Sliders (N-S & E-W independently)
 	ns_lane_btns.clear()
-	for cnt in [1, 2, 3]:
-		var cnt_val: int = int(cnt)
-		var lb := Button.new()
-		lb.text = _lane_btn_label(cnt_val)
-		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_style_button(lb, sim.spawner.ns_lanes == cnt_val, btn_h, fsz)
-		lb.pressed.connect(func():
-			sim.set_ns_lanes(cnt_val)
-			_update_lane_checkbox_visibility()
-			_refresh_lane_count_styles(btn_h, fsz)
-		)
-		ns_row.add_child(lb)
-		ns_lane_btns.append(lb)
-
-	var ew_row := HBoxContainer.new()
-	ew_row.add_theme_constant_override("separation", 5)
-	parent.add_child(ew_row)
-	var ew_lbl := Label.new()
-	ew_lbl.text = Lang.t("ew_lanes")
-	ew_lbl.add_theme_font_size_override("font_size", fsz)
-	ew_row.add_child(ew_lbl)
-
 	ew_lane_btns.clear()
-	for cnt in [1, 2, 3]:
-		var cnt_val: int = int(cnt)
-		var lb := Button.new()
-		lb.text = _lane_btn_label(cnt_val)
-		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_style_button(lb, sim.spawner.ew_lanes == cnt_val, btn_h, fsz)
-		lb.pressed.connect(func():
-			sim.set_ew_lanes(cnt_val)
-			_update_lane_checkbox_visibility()
-			_refresh_lane_count_styles(btn_h, fsz)
-		)
-		ew_row.add_child(lb)
-		ew_lane_btns.append(lb)
+	_add_int_slider(parent, Lang.t("ns_lanes"), 1, 10, sim.spawner.ns_lanes, Lang.t("lane_unit"), touch, func(val: int):
+		sim.set_ns_lanes(val)
+		_update_lane_checkbox_visibility()
+	)
+	_add_int_slider(parent, Lang.t("ew_lanes"), 1, 10, sim.spawner.ew_lanes, Lang.t("lane_unit"), touch, func(val: int):
+		sim.set_ew_lanes(val)
+		_update_lane_checkbox_visibility()
+	)
 
 	var lane_open_lbl := Label.new()
 	lane_open_lbl.text = Lang.t("lane_open_lbl")
@@ -909,11 +920,42 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 		dcb.toggled.connect(func(pressed: bool): sim.set_approach_enabled(app_i, pressed))
 		dir_open_row.add_child(dcb)
 
-func _refresh_lane_count_styles(btn_h: int, fsz: int) -> void:
-	for i in range(ns_lane_btns.size()):
-		_style_button(ns_lane_btns[i], sim.spawner.ns_lanes == (i + 1), btn_h, fsz)
-	for i in range(ew_lane_btns.size()):
-		_style_button(ew_lane_btns[i], sim.spawner.ew_lanes == (i + 1), btn_h, fsz)
+func _add_int_slider(parent: VBoxContainer, label_text: String, min_v: int, max_v: int, init_v: int, suffix: String, touch: bool, cb: Callable) -> void:
+	var fsz := 14 if touch else 12
+	var row := VBoxContainer.new()
+	row.add_theme_constant_override("separation", 3 if touch else 2)
+	parent.add_child(row)
+
+	var head := HBoxContainer.new()
+	row.add_child(head)
+
+	var l := Label.new()
+	l.text = label_text
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	l.add_theme_font_size_override("font_size", fsz)
+	head.add_child(l)
+
+	var val_lbl := Label.new()
+	val_lbl.text = "%d%s" % [init_v, suffix]
+	val_lbl.add_theme_font_size_override("font_size", fsz)
+	val_lbl.add_theme_color_override("font_color", Color(0.96, 0.86, 0.44))
+	head.add_child(val_lbl)
+
+	var sl := HSlider.new()
+	sl.min_value = float(min_v)
+	sl.max_value = float(max_v)
+	sl.step = 1.0
+	sl.value = float(init_v)
+	sl.custom_minimum_size.y = 32 if touch else 20
+	sl.add_theme_stylebox_override("slider", _style_slider_bg)
+	sl.add_theme_stylebox_override("grabber_area", _style_slider_fill)
+	sl.add_theme_stylebox_override("grabber_area_highlight", _style_slider_fill)
+	sl.value_changed.connect(func(v: float):
+		var iv := int(roundf(v))
+		val_lbl.text = "%d%s" % [iv, suffix]
+		cb.call(iv)
+	)
+	row.add_child(sl)
 
 func _populate_traffic_controls(parent: VBoxContainer, touch: bool) -> void:
 	_add_slider(parent, Lang.t("vol_global"), 0.0, 3.0, 0.1, sim.spawner.global_traffic_rate, "x", touch, func(val: float):
@@ -942,6 +984,15 @@ func _populate_signal_controls(parent: VBoxContainer, touch: bool) -> void:
 	var btn_h := 42 if touch else 32
 	var fsz := 14 if touch else 13
 	var sec := Lang.t("unit_sec")
+
+	if sim.intersection_type == RoadBuilder.IntersectionType.ROUNDABOUT:
+		var note := Label.new()
+		note.text = Lang.t("sig_disabled_rotary")
+		note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		note.add_theme_font_size_override("font_size", fsz)
+		note.add_theme_color_override("font_color", Color(0.98, 0.82, 0.36))
+		parent.add_child(note)
+		return
 
 	var mode_opt := OptionButton.new()
 	mode_opt.custom_minimum_size.y = btn_h

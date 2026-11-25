@@ -2,13 +2,14 @@ extends Node3D
 class_name VehicleSpawner
 
 const LANE_WIDTH: float = 3.5
-const SPAWN_DIST: float = 64.0
-const MAX_VEHICLES: int = 95
+const SPAWN_DIST: float = 110.0
+const MAX_VEHICLES: int = 220
 
-# Live configurable simulation settings (now supporting asymmetric N-S and E-W lanes!)
+# Live configurable simulation settings (1..10 lanes per direction, Signalized or Roundabout)
 var ns_lanes: int = 2
 var ew_lanes: int = 2
-var lane_enabled: Array[bool] = [true, true, true]
+var is_roundabout: bool = false
+var lane_enabled: Array[bool] = [true, true, true, true, true, true, true, true, true, true]
 var approach_enabled: Array[bool] = [true, true, true, true] # N, S, E, W
 var global_traffic_rate: float = 1.0
 var dir_traffic_mult: Array[float] = [1.0, 1.0, 1.0, 1.0]
@@ -45,7 +46,6 @@ func get_waiting_counts_by_dir() -> Array[int]:
 	return counts
 
 func get_active_emergency_approach() -> int:
-	# Returns approach_idx of closest approaching emergency vehicle not yet past intersection, else -1
 	var best_app := -1
 	var best_dist := 9999.0
 	for v in active_vehicles:
@@ -61,7 +61,6 @@ func spawn_ambulance(preferred_approach: int = -1) -> bool:
 	if preferred_approach >= 0 and preferred_approach < 4 and approach_enabled[preferred_approach]:
 		candidates.append(preferred_approach)
 	else:
-		# Pick approaches sorted randomly among enabled ones
 		for a in range(4):
 			if approach_enabled[a]:
 				candidates.append(a)
@@ -77,7 +76,7 @@ func spawn_ambulance(preferred_approach: int = -1) -> bool:
 		if open_lanes.is_empty():
 			continue
 		var chosen_lane: int = open_lanes[0]
-		var path_data := _build_vehicle_path(app, chosen_lane, TrafficController.TurnType.STRAIGHT)
+		var path_data := _build_path(app, chosen_lane, TrafficController.TurnType.STRAIGHT)
 		var pts: PackedVector3Array = path_data["points"]
 		var spawn_pos: Vector3 = pts[0]
 
@@ -99,7 +98,9 @@ func spawn_ambulance(preferred_approach: int = -1) -> bool:
 			path_data["stop_progress"],
 			path_data["exit_progress"],
 			SimVehicle.VehicleKind.AMBULANCE,
-			Color.WHITE
+			Color.WHITE,
+			is_roundabout,
+			path_data["ring_radius"]
 		)
 		active_vehicles.append(veh)
 		return true
@@ -116,8 +117,9 @@ func step_simulation(delta: float, traffic_ctrl: TrafficController) -> void:
 		spawn_timers[a] -= delta * rate
 		if spawn_timers[a] <= 0.0:
 			var l_cnt := ns_lanes if (a == 0 or a == 1) else ew_lanes
-			var lane_factor := 1.0 / (0.65 + 0.35 * l_cnt)
-			spawn_timers[a] = randf_range(1.6, 3.0) * lane_factor
+			# Scale spawn frequency smoothly up for wide multi-lane (up to 10 lanes) roads
+			var lane_factor := 1.0 / (0.55 + 0.45 * float(l_cnt))
+			spawn_timers[a] = randf_range(1.4, 2.7) * lane_factor
 			if active_vehicles.size() < MAX_VEHICLES:
 				_try_spawn_on_approach(a)
 
@@ -153,12 +155,12 @@ func _try_spawn_on_approach(approach_idx: int) -> void:
 		turn_type = TrafficController.TurnType.RIGHT
 
 	var chosen_lane := _pick_lane_for_turn(open_lanes, l_cnt, turn_type)
-	var path_data := _build_vehicle_path(approach_idx, chosen_lane, turn_type)
+	var path_data := _build_path(approach_idx, chosen_lane, turn_type)
 	var pts: PackedVector3Array = path_data["points"]
 	var spawn_pos: Vector3 = pts[0]
 
 	for other in active_vehicles:
-		if is_instance_valid(other) and other.position.distance_squared_to(spawn_pos) < 90.0:
+		if is_instance_valid(other) and other.position.distance_squared_to(spawn_pos) < 86.0:
 			return
 
 	var kind_roll := randf()
@@ -183,7 +185,9 @@ func _try_spawn_on_approach(approach_idx: int) -> void:
 		path_data["stop_progress"],
 		path_data["exit_progress"],
 		kind,
-		col
+		col,
+		is_roundabout,
+		path_data["ring_radius"]
 	)
 	active_vehicles.append(veh)
 
@@ -191,17 +195,26 @@ func _pick_lane_for_turn(open_lanes: Array[int], total_lanes: int, turn_type: in
 	if open_lanes.size() == 1:
 		return open_lanes[0]
 	if turn_type == TrafficController.TurnType.LEFT:
-		return open_lanes[0]
+		# Innermost 1~2 open lanes on wide roads
+		var left_band := mini(open_lanes.size(), 2 if total_lanes >= 5 else 1)
+		return open_lanes[randi() % left_band]
 	elif turn_type == TrafficController.TurnType.RIGHT:
-		return open_lanes[open_lanes.size() - 1]
+		# Outermost 1~2 open lanes on wide roads
+		var right_band := mini(open_lanes.size(), 2 if total_lanes >= 5 else 1)
+		return open_lanes[open_lanes.size() - 1 - (randi() % right_band)]
 	else:
-		if total_lanes == 3 and open_lanes.has(1):
-			if open_lanes.has(2) and randf() < 0.45:
-				return 2
-			return 1
+		# Straight: distribute across middle/all open lanes cleanly
+		if open_lanes.size() >= 3:
+			var mid_idx := 1 + (randi() % (open_lanes.size() - 1))
+			return open_lanes[mid_idx]
 		return open_lanes[randi() % open_lanes.size()]
 
-func _build_vehicle_path(approach_idx: int, lane_idx: int, turn_type: int) -> Dictionary:
+func _build_path(approach_idx: int, lane_idx: int, turn_type: int) -> Dictionary:
+	if is_roundabout:
+		return _build_roundabout_path(approach_idx, lane_idx, turn_type)
+	return _build_signalized_path(approach_idx, lane_idx, turn_type)
+
+func _build_signalized_path(approach_idx: int, lane_idx: int, turn_type: int) -> Dictionary:
 	var forwards := [Vector3(0, 0, 1), Vector3(0, 0, -1), Vector3(-1, 0, 0), Vector3(1, 0, 0)]
 	var rights := [Vector3(-1, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 0, 1)]
 
@@ -218,7 +231,7 @@ func _build_vehicle_path(approach_idx: int, lane_idx: int, turn_type: int) -> Di
 	var d_entry: float = (lane_idx + 0.5) * LANE_WIDTH
 	var exit_lane := clampi(lane_idx, 0, cross_lanes - 1)
 	if turn_type == TrafficController.TurnType.LEFT:
-		exit_lane = 0
+		exit_lane = clampi(lane_idx, 0, mini(1, cross_lanes - 1))
 	elif turn_type == TrafficController.TurnType.RIGHT:
 		exit_lane = cross_lanes - 1
 	var d_exit: float = (exit_lane + 0.5) * LANE_WIDTH
@@ -255,7 +268,7 @@ func _build_vehicle_path(approach_idx: int, lane_idx: int, turn_type: int) -> Di
 
 		var arc_len := 0.0
 		var prev := stop_pt
-		var steps := 14
+		var steps := 16
 		for s in range(1, steps + 1):
 			var t := float(s) / float(steps)
 			var omt := 1.0 - t
@@ -270,5 +283,127 @@ func _build_vehicle_path(approach_idx: int, lane_idx: int, turn_type: int) -> Di
 	return {
 		"points": pts,
 		"stop_progress": stop_prog,
-		"exit_progress": exit_prog
+		"exit_progress": exit_prog,
+		"ring_radius": 0.0
+	}
+
+func _build_roundabout_path(approach_idx: int, lane_idx: int, turn_type: int) -> Dictionary:
+	var forwards := [Vector3(0, 0, 1), Vector3(0, 0, -1), Vector3(-1, 0, 0), Vector3(1, 0, 0)]
+	var rights := [Vector3(-1, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 0, 1)]
+
+	var f: Vector3 = forwards[approach_idx]
+	var r: Vector3 = rights[approach_idx]
+	var is_ns := (approach_idx == 0 or approach_idx == 1)
+
+	var rinfo := RoadBuilder.get_roundabout_radii(ns_lanes, ew_lanes)
+	var ring_lanes: int = rinfo["ring_lanes"]
+	var island_r: float = rinfo["island_r"]
+	var outer_r: float = rinfo["outer_r"]
+	var yield_dist: float = rinfo["yield_dist"]
+
+	var d_entry: float = (lane_idx + 0.5) * LANE_WIDTH
+	var spawn_pt := -f * SPAWN_DIST + r * d_entry
+	var yield_pt := -f * yield_dist + r * d_entry
+	var entry_rim_d := sqrt(maxf(1.0, outer_r * outer_r - d_entry * d_entry))
+	var entry_rim := -f * entry_rim_d + r * d_entry
+
+	var exit_f: Vector3 = f
+	var exit_r: Vector3 = r
+	var exit_lanes: int = ns_lanes if is_ns else ew_lanes
+	if turn_type == TrafficController.TurnType.RIGHT:
+		exit_f = r
+		exit_r = -f
+		exit_lanes = ew_lanes if is_ns else ns_lanes
+	elif turn_type == TrafficController.TurnType.LEFT:
+		exit_f = -r
+		exit_r = f
+		exit_lanes = ew_lanes if is_ns else ns_lanes
+
+	var circ_lane := clampi(lane_idx, 0, ring_lanes - 1)
+	var exit_lane := clampi(lane_idx, 0, exit_lanes - 1)
+	if turn_type == TrafficController.TurnType.RIGHT:
+		circ_lane = ring_lanes - 1
+		exit_lane = exit_lanes - 1
+	elif turn_type == TrafficController.TurnType.LEFT:
+		circ_lane = clampi(lane_idx, 0, mini(1, ring_lanes - 1))
+		exit_lane = clampi(lane_idx, 0, mini(1, exit_lanes - 1))
+
+	var r_circ := island_r + (float(circ_lane) + 0.5) * LANE_WIDTH
+	var d_exit := (float(exit_lane) + 0.5) * LANE_WIDTH
+	var exit_rim_d := sqrt(maxf(1.0, outer_r * outer_r - d_exit * d_exit))
+	var exit_rim := exit_f * exit_rim_d + exit_r * d_exit
+	var exit_yield := exit_f * yield_dist + exit_r * d_exit
+	var end_pt := exit_f * SPAWN_DIST + exit_r * d_exit
+
+	var pts := PackedVector3Array()
+	pts.append(spawn_pt)
+	pts.append(yield_pt)
+	var stop_prog := spawn_pt.distance_to(yield_pt)
+
+	var a_entry := atan2(entry_rim.z, entry_rim.x)
+	var a_exit := atan2(exit_rim.z, exit_rim.x)
+	# Counter-clockwise (decreasing angle in Godot XZ plane viewed from +Y)
+	var raw_ccw := wrapf(a_exit - a_entry, -TAU, 0.0)
+	if raw_ccw > -0.02:
+		raw_ccw -= TAU
+
+	var arc_len := 0.0
+	var prev := yield_pt
+
+	if turn_type == TrafficController.TurnType.RIGHT and absf(raw_ccw) < 0.30:
+		# Very wide road tight right turn: smooth Bezier directly along outer edge
+		var mid_a := a_entry + raw_ccw * 0.5
+		var ctrl := Vector3(cos(mid_a) * outer_r, 0.0, sin(mid_a) * outer_r)
+		var steps := 10
+		for s in range(1, steps + 1):
+			var t := float(s) / float(steps)
+			var omt := 1.0 - t
+			var p := (omt * omt) * yield_pt + (2.0 * omt * t) * ctrl + (t * t) * exit_yield
+			arc_len += prev.distance_to(p)
+			pts.append(p)
+			prev = p
+	else:
+		var shift := minf(0.11, absf(raw_ccw) * 0.18)
+		var a_start := a_entry - shift
+		var a_end := a_entry + raw_ccw + shift
+		var p_ring_start := Vector3(cos(a_start) * r_circ, 0.0, sin(a_start) * r_circ)
+		var p_ring_end := Vector3(cos(a_end) * r_circ, 0.0, sin(a_end) * r_circ)
+
+		# 1. Smooth entry curve: yield_pt -> entry_rim -> p_ring_start
+		for s in range(1, 5):
+			var t := float(s) / 4.0
+			var omt := 1.0 - t
+			var p := (omt * omt) * yield_pt + (2.0 * omt * t) * entry_rim + (t * t) * p_ring_start
+			arc_len += prev.distance_to(p)
+			pts.append(p)
+			prev = p
+
+		# 2. Exact CCW circular arc along r_circ
+		var sweep := a_end - a_start
+		var arc_steps := clampi(int(absf(sweep) * 14.0), 6, 36)
+		for s in range(1, arc_steps + 1):
+			var t := float(s) / float(arc_steps)
+			var ang := a_start + sweep * t
+			var p := Vector3(cos(ang) * r_circ, 0.0, sin(ang) * r_circ)
+			arc_len += prev.distance_to(p)
+			pts.append(p)
+			prev = p
+
+		# 3. Smooth exit curve: p_ring_end -> exit_rim -> exit_yield
+		for s in range(1, 5):
+			var t := float(s) / 4.0
+			var omt := 1.0 - t
+			var p := (omt * omt) * p_ring_end + (2.0 * omt * t) * exit_rim + (t * t) * exit_yield
+			arc_len += prev.distance_to(p)
+			pts.append(p)
+			prev = p
+
+	pts.append(end_pt)
+	var exit_prog := stop_prog + arc_len
+
+	return {
+		"points": pts,
+		"stop_progress": stop_prog,
+		"exit_progress": exit_prog,
+		"ring_radius": r_circ
 	}
