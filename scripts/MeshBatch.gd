@@ -100,6 +100,50 @@ func add_quad_up(p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3, mat: Materi
 		st.add_vertex(p3)
 		st.add_vertex(p2)
 
+func add_triangle_up(p0: Vector3, p1: Vector3, p2: Vector3, mat: Material) -> void:
+	var st := _get_st(mat)
+	st.set_normal(Vector3.UP)
+	var n := (p1 - p0).cross(p2 - p0)
+	if n.y <= 0.0:
+		st.add_vertex(p0)
+		st.add_vertex(p1)
+		st.add_vertex(p2)
+	else:
+		st.add_vertex(p0)
+		st.add_vertex(p2)
+		st.add_vertex(p1)
+
+func add_quad_normal(p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3, out_n: Vector3, mat: Material) -> void:
+	var st := _get_st(mat)
+	var n_dir := out_n.normalized()
+	st.set_normal(n_dir)
+	var c := (p1 - p0).cross(p2 - p0)
+	if c.dot(n_dir) <= 0.0:
+		st.add_vertex(p0)
+		st.add_vertex(p1)
+		st.add_vertex(p2)
+		st.add_vertex(p0)
+		st.add_vertex(p2)
+		st.add_vertex(p3)
+	else:
+		st.add_vertex(p0)
+		st.add_vertex(p2)
+		st.add_vertex(p1)
+		st.add_vertex(p0)
+		st.add_vertex(p3)
+		st.add_vertex(p2)
+
+func add_arc_ribbon(r_inner: float, r_outer: float, a0: float, a1: float, y: float, segs: int, mat: Material) -> void:
+	var n := maxi(1, segs)
+	for i in range(n):
+		var t0 := lerpf(a0, a1, float(i) / float(n))
+		var t1 := lerpf(a0, a1, float(i + 1) / float(n))
+		var p0 := Vector3(cos(t0) * r_inner, y, sin(t0) * r_inner)
+		var p1 := Vector3(cos(t0) * r_outer, y, sin(t0) * r_outer)
+		var p2 := Vector3(cos(t1) * r_outer, y, sin(t1) * r_outer)
+		var p3 := Vector3(cos(t1) * r_inner, y, sin(t1) * r_inner)
+		add_quad_up(p0, p1, p2, p3, mat)
+
 func commit_multi_surface() -> ArrayMesh:
 	var arr := ArrayMesh.new()
 	for mat in _batches.keys():

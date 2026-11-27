@@ -37,9 +37,9 @@ var congestion_overlay_enabled: bool = true
 
 static func get_roundabout_radii(ns_lanes: int, ew_lanes: int) -> Dictionary:
 	var ring_lanes := clampi(maxi(ns_lanes, ew_lanes), 1, 10)
-	var island_r := maxf(6.5, 5.5 + float(ring_lanes) * 0.85)
+	var island_r := maxf(6.8, 5.5 + float(ring_lanes) * 1.45)
 	var outer_r := island_r + float(ring_lanes) * LANE_WIDTH
-	var yield_dist := outer_r + 2.8
+	var yield_dist := outer_r + 1.15
 	return {
 		"ring_lanes": ring_lanes,
 		"island_r": island_r,
@@ -234,7 +234,8 @@ func _build_roundabout_geometry(flat_batch: MeshBatch, solid_batch: MeshBatch, n
 	var ring_lanes: int = rinfo["ring_lanes"]
 	var island_r: float = rinfo["island_r"]
 	var outer_r: float = rinfo["outer_r"]
-	var yield_dist: float = rinfo["yield_dist"]
+	var cw_dist: float = outer_r + 5.6
+	var mark_y: float = 0.05
 
 	# 1. Circulatory asphalt disk (top at y = 0.0)
 	flat_batch.add_cylinder(Vector3(0, -0.10, 0), outer_r, 0.20, intersection_mat, Vector3.ZERO, true)
@@ -245,9 +246,10 @@ func _build_roundabout_geometry(flat_batch: MeshBatch, solid_batch: MeshBatch, n
 	_add_roundabout_arm_quads(flat_batch, ew_half, outer_r, false, 1.0)
 	_add_roundabout_arm_quads(flat_batch, ew_half, outer_r, false, -1.0)
 
-	# 3. Central Landscaped Island
+	# 3. Central Landscaped Island + Inner Solid Yellow Ring Line
 	flat_batch.add_cylinder(Vector3(0, 0.14, 0), island_r, 0.28, sidewalk_mat, Vector3.ZERO, true)
-	flat_batch.add_cylinder(Vector3(0, 0.36, 0), maxf(2.0, island_r - 0.65), 0.16, grass_mat, Vector3.ZERO, true)
+	flat_batch.add_cylinder(Vector3(0, 0.36, 0), maxf(2.0, island_r - 0.85), 0.16, grass_mat, Vector3.ZERO, true)
+	flat_batch.add_arc_ribbon(island_r + 0.14, island_r + 0.30, 0.0, TAU, mark_y, 64, yellow_line_mat)
 
 	# Central monument
 	solid_batch.add_tapered_cylinder(Vector3(0, 0.84, 0), 1.6, 2.2, 0.8, monument_mat, 16)
@@ -261,23 +263,306 @@ func _build_roundabout_geometry(flat_batch: MeshBatch, solid_batch: MeshBatch, n
 			var ang := TAU * float(i) / float(tree_cnt)
 			_add_tree(solid_batch, Vector3(cos(ang) * tree_ring_r, 0.44, sin(ang) * tree_ring_r))
 
-	# 4. Dashed Circular Lane Lines (all batched into 1 draw call!)
+	# 4. True Curved Dashed Circulatory Lane Dividers
 	for l in range(1, ring_lanes):
 		var lr := island_r + float(l) * LANE_WIDTH
 		var circ := TAU * lr
-		var dash_cnt := maxi(12, int(circ / 5.5))
+		var dash_cnt := maxi(14, int(circ / 5.6))
+		var step_a := TAU / float(dash_cnt)
 		for d in range(dash_cnt):
-			var a := TAU * float(d) / float(dash_cnt)
-			flat_batch.add_plane_xz(Vector3(cos(a) * lr, 0.05, sin(a) * lr), Vector2(0.16, 2.4), white_line_mat, -a)
+			var a0 := float(d) * step_a
+			var a1 := a0 + step_a * 0.52
+			flat_batch.add_arc_ribbon(lr - 0.08, lr + 0.08, a0, a1, mark_y, 3, white_line_mat)
 
-	# 5. Corner urban blocks outside roundabout circle
-	var block_offset := maxf(outer_r + 1.5, maxf(ns_half, ew_half) + 1.5)
+	# 5. Outer Solid White Edge Lines along the 4 corner arcs between road arms
+	var half_ang_ns := asin(clampf(ns_half / outer_r, 0.0, 0.96))
+	var half_ang_ew := asin(clampf(ew_half / outer_r, 0.0, 0.96))
+	var corner_arcs := [
+		Vector2(half_ang_ew, PI * 0.5 - half_ang_ns),             # SE (+X, +Z)
+		Vector2(PI * 0.5 + half_ang_ns, PI - half_ang_ew),        # SW (-X, +Z)
+		Vector2(PI + half_ang_ew, PI * 1.5 - half_ang_ns),        # NW (-X, -Z)
+		Vector2(PI * 1.5 + half_ang_ns, TAU - half_ang_ew)        # NE (+X, -Z)
+	]
+	for arc_span in corner_arcs:
+		var s_span: Vector2 = arc_span
+		if s_span.y > s_span.x + 0.02:
+			flat_batch.add_arc_ribbon(outer_r - 0.24, outer_r - 0.08, s_span.x, s_span.y, mark_y, 10, white_line_mat)
+
+	# 6. CCW Circulatory Directional Arrows at 4 intercardinal angles
+	var arrow_lanes: Array[int] = [int(ring_lanes / 2)]
+	if ring_lanes >= 4:
+		arrow_lanes = [0, int(ring_lanes / 2), ring_lanes - 1]
+	for al in arrow_lanes:
+		var ar := island_r + (float(al) + 0.5) * LANE_WIDTH
+		for q in range(4):
+			var ang := PI * 0.25 + float(q) * (PI * 0.5)
+			var pos := Vector3(cos(ang) * ar, mark_y, sin(ang) * ar)
+			var ccw_fwd := Vector3(sin(ang), 0.0, -cos(ang))
+			var rad_out := Vector3(cos(ang), 0.0, sin(ang))
+			_add_pavement_arrow(flat_batch, pos, ccw_fwd, rad_out, white_line_mat)
+
+	# 7. Watertight Curved Corner Sidewalks + Arm Sidewalk Strips + Urban Corner Blocks
+	var block_offset := outer_r + 2.0
 	_build_corner_blocks(flat_batch, solid_batch, block_offset, block_offset)
+	_build_roundabout_sidewalks(flat_batch, solid_batch, ns_half, ew_half, outer_r, block_offset)
 
-	# 6. Arm lane lines, yield lines, crosswalks, congestion bars, cones
-	_build_arm_markings(flat_batch, ns_lanes, ew_lanes, ns_half, ew_half, yield_dist, yield_dist, yield_dist + 2.4, yield_dist + 2.4, true)
-	_build_congestion_bars(ns_half, ew_half, yield_dist + 3.8, yield_dist + 3.8)
-	_build_lane_cones(solid_batch, ns_lanes, ew_lanes, yield_dist + 1.5, yield_dist + 1.5, lane_enabled, approach_enabled)
+	# 8. Continuous Arm Lane Markings, Curved Rim Yield Lines + Shark-Teeth, Splitter Islands, Crosswalks
+	_build_roundabout_arm_markings(flat_batch, ns_lanes, ew_lanes, ns_half, ew_half, outer_r, cw_dist)
+	_build_congestion_bars(ns_half, ew_half, cw_dist + 2.5, cw_dist + 2.5)
+	_build_lane_cones(solid_batch, ns_lanes, ew_lanes, cw_dist + 2.5, cw_dist + 2.5, lane_enabled, approach_enabled)
+
+func _add_pavement_arrow(flat_batch: MeshBatch, center: Vector3, fwd_dir: Vector3, right_dir: Vector3, mat: Material) -> void:
+	var f := fwd_dir.normalized()
+	var r := right_dir.normalized()
+	# Arrow shaft
+	var s0 := center - f * 1.15 - r * 0.17
+	var s1 := center - f * 1.15 + r * 0.17
+	var s2 := center + f * 0.55 + r * 0.17
+	var s3 := center + f * 0.55 - r * 0.17
+	flat_batch.add_quad_up(s0, s1, s2, s3, mat)
+	# Arrowhead
+	var h0 := center + f * 0.50 - r * 0.58
+	var h1 := center + f * 0.50 + r * 0.58
+	var h2 := center + f * 1.65
+	flat_batch.add_triangle_up(h0, h1, h2, mat)
+
+func _build_roundabout_sidewalks(flat_batch: MeshBatch, solid_batch: MeshBatch, ns_half: float, ew_half: float, outer_r: float, block_offset: float) -> void:
+	var b_lim := block_offset + 0.04
+	var r_curb := outer_r + 0.04
+	var x_arm := ns_half + 0.04
+	var z_arm := ew_half + 0.04
+	var top_y := 0.20
+	var bot_y := -0.02
+
+	var x_ew := sqrt(maxf(0.1, r_curb * r_curb - z_arm * z_arm))
+	var z_ns := sqrt(maxf(0.1, r_curb * r_curb - x_arm * x_arm))
+	var a_ew_loc := atan2(z_arm, x_ew)
+	var a_ns_loc := atan2(z_ns, x_arm)
+	var segs := 14
+
+	# 4 curved corner sidewalk aprons + vertical curb skirts hugging the roundabout rim
+	for sx in [-1.0, 1.0]:
+		for sz in [-1.0, 1.0]:
+			var fx: float = float(sx)
+			var fz: float = float(sz)
+			var corner := Vector3(fx * b_lim, top_y, fz * b_lim)
+			var c_ew := Vector3(fx * b_lim, top_y, fz * z_arm)
+			var c_ns := Vector3(fx * x_arm, top_y, fz * b_lim)
+
+			var arc_pts: Array[Vector3] = []
+			for i in range(segs + 1):
+				var ang := lerpf(a_ew_loc, a_ns_loc, float(i) / float(segs))
+				arc_pts.append(Vector3(fx * cos(ang) * r_curb, top_y, fz * sin(ang) * r_curb))
+
+			# Top surface fan (strictly non-overlapping, watertight up to corner blocks)
+			flat_batch.add_triangle_up(corner, c_ew, arc_pts[0], sidewalk_mat)
+			for i in range(segs):
+				flat_batch.add_triangle_up(corner, arc_pts[i], arc_pts[i + 1], sidewalk_mat)
+			flat_batch.add_triangle_up(corner, arc_pts[segs], c_ns, sidewalk_mat)
+
+			# Vertical curb walls along straight EW edge, curved corner arc, and straight NS edge
+			var p_ew0_b := Vector3(c_ew.x, bot_y, c_ew.z)
+			var p_ew1_b := Vector3(arc_pts[0].x, bot_y, arc_pts[0].z)
+			flat_batch.add_quad_normal(p_ew0_b, p_ew1_b, arc_pts[0], c_ew, Vector3(0.0, 0.0, -fz), sidewalk_mat)
+
+			for i in range(segs):
+				var t0 := arc_pts[i]
+				var t1 := arc_pts[i + 1]
+				var b0 := Vector3(t0.x, bot_y, t0.z)
+				var b1 := Vector3(t1.x, bot_y, t1.z)
+				var mid := (t0 + t1) * 0.5
+				var inward_n := Vector3(-mid.x, 0.0, -mid.z)
+				flat_batch.add_quad_normal(b0, b1, t1, t0, inward_n, sidewalk_mat)
+
+			var p_ns0_b := Vector3(arc_pts[segs].x, bot_y, arc_pts[segs].z)
+			var p_ns1_b := Vector3(c_ns.x, bot_y, c_ns.z)
+			flat_batch.add_quad_normal(p_ns0_b, p_ns1_b, c_ns, arc_pts[segs], Vector3(-fx, 0.0, 0.0), sidewalk_mat)
+
+	# Straight arm sidewalk strips from b_lim out to ROAD_HALF_LEN (eliminates empty grass strips along arms)
+	var arm_len := maxf(0.0, ROAD_HALF_LEN - b_lim)
+	var ns_strip_w := maxf(0.0, b_lim - x_arm)
+	var ew_strip_d := maxf(0.0, b_lim - z_arm)
+	if arm_len > 0.2:
+		for sx in [-1.0, 1.0]:
+			for sz in [-1.0, 1.0]:
+				var fx: float = float(sx)
+				var fz: float = float(sz)
+				if ns_strip_w > 0.15:
+					flat_batch.add_box(Vector3(fx * (x_arm + ns_strip_w * 0.5), 0.05, fz * (b_lim + arm_len * 0.5)), Vector3(ns_strip_w, 0.30, arm_len), sidewalk_mat)
+					if ns_strip_w > 4.6 and arm_len > 8.0:
+						var gw := ns_strip_w - 3.9
+						var gd := arm_len - 4.8
+						flat_batch.add_box(Vector3(fx * (x_arm + 3.8 + gw * 0.5), 0.26, fz * (b_lim + 3.8 + gd * 0.5)), Vector3(gw, 0.12, gd), grass_mat)
+						if b_lim + 12.0 < ROAD_HALF_LEN - 4.0:
+							_add_tree(solid_batch, Vector3(fx * (x_arm + 5.6), 0.32, fz * (b_lim + 12.0)))
+				if ew_strip_d > 0.15:
+					flat_batch.add_box(Vector3(fx * (b_lim + arm_len * 0.5), 0.05, fz * (z_arm + ew_strip_d * 0.5)), Vector3(arm_len, 0.30, ew_strip_d), sidewalk_mat)
+					if ew_strip_d > 4.6 and arm_len > 8.0:
+						var gw2 := arm_len - 4.8
+						var gd2 := ew_strip_d - 3.9
+						flat_batch.add_box(Vector3(fx * (b_lim + 3.8 + gw2 * 0.5), 0.26, fz * (z_arm + 3.8 + gd2 * 0.5)), Vector3(gw2, 0.12, gd2), grass_mat)
+						if b_lim + 12.0 < ROAD_HALF_LEN - 4.0:
+							_add_tree(solid_batch, Vector3(fx * (b_lim + 12.0), 0.32, fz * (z_arm + 5.6)))
+
+func _build_roundabout_arm_markings(flat_batch: MeshBatch, ns_lanes: int, ew_lanes: int, ns_half: float, ew_half: float, outer_r: float, cw_dist: float) -> void:
+	var mark_y: float = 0.05
+	var arm_dirs := [Vector3(0, 0, -1), Vector3(0, 0, 1), Vector3(1, 0, 0), Vector3(-1, 0, 0)]
+	var in_sides := [Vector3(-1, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 0, 1)]
+	var splitter_end := outer_r + 12.0
+
+	for a in range(4):
+		var is_ns := (a == 0 or a == 1)
+		var arm_lanes := ns_lanes if is_ns else ew_lanes
+		var arm_half := ns_half if is_ns else ew_half
+		var arm_dir: Vector3 = arm_dirs[a]
+		var in_side: Vector3 = in_sides[a]
+
+		# 1. Triangular Concrete Splitter Island (split at crosswalk for pedestrian refuge)
+		_add_splitter_island_segment(flat_batch, arm_dir, in_side, outer_r + 0.72, 0.56, cw_dist - 1.32, 0.48)
+		_add_splitter_island_segment(flat_batch, arm_dir, in_side, cw_dist + 1.32, 0.44, splitter_end, 0.20)
+
+		# 2. Double Yellow Centerline starting cleanly at splitter island tip
+		var cl_len := maxf(2.0, ROAD_HALF_LEN - splitter_end)
+		for side_s in [-1.0, 1.0]:
+			var u_c: float = float(side_s) * 0.15
+			var p0 := arm_dir * splitter_end + in_side * (u_c - 0.07) + Vector3(0, mark_y, 0)
+			var p1 := arm_dir * splitter_end + in_side * (u_c + 0.07) + Vector3(0, mark_y, 0)
+			var p2 := arm_dir * (splitter_end + cl_len) + in_side * (u_c + 0.07) + Vector3(0, mark_y, 0)
+			var p3 := arm_dir * (splitter_end + cl_len) + in_side * (u_c - 0.07) + Vector3(0, mark_y, 0)
+			flat_batch.add_quad_up(p0, p1, p2, p3, yellow_line_mat)
+
+		# 3. Outer Solid White Road Edge Lines joining the 4 corner circular arcs seamlessly
+		var u_edge := arm_half - 0.16
+		var edge_rim_d := sqrt(maxf(1.0, outer_r * outer_r - u_edge * u_edge))
+		for side_s in [-1.0, 1.0]:
+			var ue: float = float(side_s) * u_edge
+			var e0 := arm_dir * edge_rim_d + in_side * (ue - 0.08) + Vector3(0, mark_y, 0)
+			var e1 := arm_dir * edge_rim_d + in_side * (ue + 0.08) + Vector3(0, mark_y, 0)
+			var e2 := arm_dir * ROAD_HALF_LEN + in_side * (ue + 0.08) + Vector3(0, mark_y, 0)
+			var e3 := arm_dir * ROAD_HALF_LEN + in_side * (ue - 0.08) + Vector3(0, mark_y, 0)
+			flat_batch.add_quad_up(e0, e1, e2, e3, white_line_mat)
+
+		# 4. Curved Dashed Yield Line hugging the circular rim on incoming lanes (+in_side)
+		var r_y_in := outer_r + 0.14
+		var r_y_out := outer_r + 0.62
+		var u_y := 0.82
+		while u_y < arm_half - 0.55:
+			var u_end := minf(u_y + 0.88, arm_half - 0.30)
+			var u_mid := (u_y + u_end) * 0.5
+			var rim0 := (arm_dir * sqrt(maxf(1.0, outer_r * outer_r - u_y * u_y)) + in_side * u_y).normalized()
+			var rim_m := (arm_dir * sqrt(maxf(1.0, outer_r * outer_r - u_mid * u_mid)) + in_side * u_mid).normalized()
+			var rim1 := (arm_dir * sqrt(maxf(1.0, outer_r * outer_r - u_end * u_end)) + in_side * u_end).normalized()
+			flat_batch.add_quad_up(
+				rim0 * r_y_in + Vector3(0, mark_y, 0),
+				rim0 * r_y_out + Vector3(0, mark_y, 0),
+				rim_m * r_y_out + Vector3(0, mark_y, 0),
+				rim_m * r_y_in + Vector3(0, mark_y, 0),
+				white_line_mat
+			)
+			flat_batch.add_quad_up(
+				rim_m * r_y_in + Vector3(0, mark_y, 0),
+				rim_m * r_y_out + Vector3(0, mark_y, 0),
+				rim1 * r_y_out + Vector3(0, mark_y, 0),
+				rim1 * r_y_in + Vector3(0, mark_y, 0),
+				white_line_mat
+			)
+			u_y += 1.52
+
+		# 5. Yield Shark-Teeth (▽) on every incoming lane following the curved rim
+		var r_tri_base := outer_r + 1.05
+		var r_tri_tip := outer_r + 2.10
+		for l in range(arm_lanes):
+			var uc := (float(l) + 0.5) * LANE_WIDTH
+			var d_base := sqrt(maxf(1.0, r_tri_base * r_tri_base - uc * uc))
+			var d_tip := sqrt(maxf(1.0, r_tri_tip * r_tri_tip - uc * uc))
+			var tb0 := arm_dir * d_base + in_side * (uc - 0.50) + Vector3(0, mark_y, 0)
+			var tb1 := arm_dir * d_base + in_side * (uc + 0.50) + Vector3(0, mark_y, 0)
+			var ttip := arm_dir * d_tip + in_side * uc + Vector3(0, mark_y, 0)
+			flat_batch.add_triangle_up(tb0, tb1, ttip, white_line_mat)
+
+		# 6. Continuous Arm Lane Dividers (solid approaching yield line, dashed out to road end)
+		var cw_near := cw_dist - 1.35
+		var cw_far := cw_dist + 1.35
+		for l in range(1, arm_lanes):
+			var u_div := float(l) * LANE_WIDTH
+			var d_rim_in := sqrt(maxf(1.0, (outer_r + 0.78) * (outer_r + 0.78) - u_div * u_div)) + 0.25
+			var d_rim_out := sqrt(maxf(1.0, outer_r * outer_r - u_div * u_div)) + 0.35
+
+			# Incoming lane divider: solid white line from curved yield zone to crosswalk
+			if cw_near > d_rim_in + 0.6:
+				var si0 := arm_dir * d_rim_in + in_side * (u_div - 0.07) + Vector3(0, mark_y, 0)
+				var si1 := arm_dir * d_rim_in + in_side * (u_div + 0.07) + Vector3(0, mark_y, 0)
+				var si2 := arm_dir * cw_near + in_side * (u_div + 0.07) + Vector3(0, mark_y, 0)
+				var si3 := arm_dir * cw_near + in_side * (u_div - 0.07) + Vector3(0, mark_y, 0)
+				flat_batch.add_quad_up(si0, si1, si2, si3, white_line_mat)
+
+			# Outgoing lane divider: dashed guiding line from rim to crosswalk
+			var d_o := d_rim_out
+			while d_o < cw_near - 0.8:
+				var d_o1 := minf(d_o + 2.2, cw_near)
+				var so0 := arm_dir * d_o - in_side * (u_div - 0.07) + Vector3(0, mark_y, 0)
+				var so1 := arm_dir * d_o - in_side * (u_div + 0.07) + Vector3(0, mark_y, 0)
+				var so2 := arm_dir * d_o1 - in_side * (u_div + 0.07) + Vector3(0, mark_y, 0)
+				var so3 := arm_dir * d_o1 - in_side * (u_div - 0.07) + Vector3(0, mark_y, 0)
+				flat_batch.add_quad_up(so0, so1, so2, so3, white_line_mat)
+				d_o += 4.2
+
+			# Both sides beyond crosswalk: standard dashed lane lines out to ROAD_HALF_LEN
+			var d_pos := cw_far + 1.2
+			while d_pos < ROAD_HALF_LEN - 2.0:
+				var d_end := minf(d_pos + 2.8, ROAD_HALF_LEN - 1.0)
+				for side_s in [-1.0, 1.0]:
+					var uu: float = float(side_s) * u_div
+					var q0 := arm_dir * d_pos + in_side * (uu - 0.07) + Vector3(0, mark_y, 0)
+					var q1 := arm_dir * d_pos + in_side * (uu + 0.07) + Vector3(0, mark_y, 0)
+					var q2 := arm_dir * d_end + in_side * (uu + 0.07) + Vector3(0, mark_y, 0)
+					var q3 := arm_dir * d_end + in_side * (uu - 0.07) + Vector3(0, mark_y, 0)
+					flat_batch.add_quad_up(q0, q1, q2, q3, white_line_mat)
+				d_pos += 6.0
+
+		# 7. Zebra Crosswalk (1 car length behind yield line, cleanly passing splitter island refuge)
+		var u_cw := -arm_half + 0.9
+		while u_cw <= arm_half - 0.8:
+			if absf(u_cw) >= 0.95:
+				var c0 := arm_dir * (cw_dist - 1.0) + in_side * (u_cw - 0.37) + Vector3(0, mark_y, 0)
+				var c1 := arm_dir * (cw_dist - 1.0) + in_side * (u_cw + 0.37) + Vector3(0, mark_y, 0)
+				var c2 := arm_dir * (cw_dist + 1.0) + in_side * (u_cw + 0.37) + Vector3(0, mark_y, 0)
+				var c3 := arm_dir * (cw_dist + 1.0) + in_side * (u_cw - 0.37) + Vector3(0, mark_y, 0)
+				flat_batch.add_quad_up(c0, c1, c2, c3, white_line_mat)
+			u_cw += 1.72
+
+func _add_splitter_island_segment(flat_batch: MeshBatch, arm_dir: Vector3, in_side: Vector3, d0: float, hw0: float, d1: float, hw1: float) -> void:
+	if d1 <= d0 + 0.3:
+		return
+	var top_y := 0.16
+	var bot_y := -0.02
+	var mark_y := 0.05
+
+	var t_l0 := arm_dir * d0 - in_side * hw0 + Vector3(0, top_y, 0)
+	var t_r0 := arm_dir * d0 + in_side * hw0 + Vector3(0, top_y, 0)
+	var t_r1 := arm_dir * d1 + in_side * hw1 + Vector3(0, top_y, 0)
+	var t_l1 := arm_dir * d1 - in_side * hw1 + Vector3(0, top_y, 0)
+
+	var b_l0 := Vector3(t_l0.x, bot_y, t_l0.z)
+	var b_r0 := Vector3(t_r0.x, bot_y, t_r0.z)
+	var b_r1 := Vector3(t_r1.x, bot_y, t_r1.z)
+	var b_l1 := Vector3(t_l1.x, bot_y, t_l1.z)
+
+	# Raised concrete curb top & 4 vertical walls
+	flat_batch.add_quad_up(t_l0, t_r0, t_r1, t_l1, sidewalk_mat)
+	flat_batch.add_quad_normal(b_l0, b_r0, t_r0, t_l0, -arm_dir, sidewalk_mat)
+	flat_batch.add_quad_normal(b_r1, b_l1, t_l1, t_r1, arm_dir, sidewalk_mat)
+	flat_batch.add_quad_normal(b_r0, b_r1, t_r1, t_r0, in_side, sidewalk_mat)
+	flat_batch.add_quad_normal(b_l1, b_l0, t_l0, t_l1, -in_side, sidewalk_mat)
+
+	# Crisp painted yellow curb edge lines along both sides of the splitter island
+	for side_s in [-1.0, 1.0]:
+		var ss: float = float(side_s)
+		var y0 := arm_dir * d0 + in_side * (ss * (hw0 + 0.04)) + Vector3(0, mark_y, 0)
+		var y1 := arm_dir * d0 + in_side * (ss * (hw0 + 0.16)) + Vector3(0, mark_y, 0)
+		var y2 := arm_dir * d1 + in_side * (ss * (hw1 + 0.16)) + Vector3(0, mark_y, 0)
+		var y3 := arm_dir * d1 + in_side * (ss * (hw1 + 0.04)) + Vector3(0, mark_y, 0)
+		flat_batch.add_quad_up(y0, y1, y2, y3, yellow_line_mat)
 
 func _add_roundabout_arm_quads(flat_batch: MeshBatch, half_w: float, outer_r: float, along_z: bool, dir_sign: float) -> void:
 	var slices := 18

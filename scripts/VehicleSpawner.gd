@@ -335,12 +335,13 @@ func _build_roundabout_path(approach_idx: int, lane_idx: int, turn_type: int) ->
 	var ring_lanes: int = rinfo["ring_lanes"]
 	var island_r: float = rinfo["island_r"]
 	var outer_r: float = rinfo["outer_r"]
-	var yield_dist: float = rinfo["yield_dist"]
+	var yield_r: float = outer_r + 0.95
 
 	var d_entry: float = (lane_idx + 0.5) * LANE_WIDTH
 	var spawn_pt := -f * SPAWN_DIST + r * d_entry
-	var yield_pt := -f * yield_dist + r * d_entry
 	var entry_rim_d := sqrt(maxf(1.0, outer_r * outer_r - d_entry * d_entry))
+	var entry_yield_d := sqrt(maxf(1.0, yield_r * yield_r - d_entry * d_entry))
+	var yield_pt := -f * entry_yield_d + r * d_entry
 	var entry_rim := -f * entry_rim_d + r * d_entry
 
 	var exit_f: Vector3 = f
@@ -367,8 +368,9 @@ func _build_roundabout_path(approach_idx: int, lane_idx: int, turn_type: int) ->
 	var r_circ := island_r + (float(circ_lane) + 0.5) * LANE_WIDTH
 	var d_exit := (float(exit_lane) + 0.5) * LANE_WIDTH
 	var exit_rim_d := sqrt(maxf(1.0, outer_r * outer_r - d_exit * d_exit))
+	var exit_yield_d := sqrt(maxf(1.0, yield_r * yield_r - d_exit * d_exit))
 	var exit_rim := exit_f * exit_rim_d + exit_r * d_exit
-	var exit_yield := exit_f * yield_dist + exit_r * d_exit
+	var exit_yield := exit_f * exit_yield_d + exit_r * d_exit
 	var end_pt := exit_f * SPAWN_DIST + exit_r * d_exit
 
 	var pts := PackedVector3Array()
