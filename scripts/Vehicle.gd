@@ -3,7 +3,7 @@ class_name SimVehicle
 
 enum VehicleKind { SEDAN, SUV, TRUCK, TAXI, AMBULANCE }
 
-# Static shared materials (eliminates per-vehicle material allocation & WebGL2 shader recompilation flicker)
+# Static shared materials & pre-baked vehicle meshes (eliminates per-car GPU VBO allocation & draw-call overflow!)
 static var _mats_ready: bool = false
 static var _glass_mat: StandardMaterial3D
 static var _wheel_mat: StandardMaterial3D
@@ -17,9 +17,10 @@ static var _siren_blue_on: StandardMaterial3D
 static var _siren_blue_off: StandardMaterial3D
 static var _brake_off_mat: StandardMaterial3D
 static var _brake_on_mat: StandardMaterial3D
-static var _turn_off_mat: StandardMaterial3D
-static var _turn_on_mat: StandardMaterial3D
 static var _body_mat_cache: Dictionary = {}
+static var _baked_mesh_cache: Dictionary = {} # String key -> ArrayMesh
+static var _shared_brake_mesh: BoxMesh
+static var _shared_siren_mesh: BoxMesh
 
 static func _ensure_shared_mats() -> void:
 	if _mats_ready:
@@ -63,8 +64,11 @@ static func _ensure_shared_mats() -> void:
 	_brake_off_mat = _make_emissive_mat(Color(0.45, 0.05, 0.05), Color.BLACK, 0.0)
 	_brake_on_mat = _make_emissive_mat(Color(1.0, 0.10, 0.08), Color(1.0, 0.12, 0.08), 2.0)
 
-	_turn_off_mat = _make_emissive_mat(Color(0.35, 0.22, 0.02), Color.BLACK, 0.0)
-	_turn_on_mat = _make_emissive_mat(Color(1.0, 0.68, 0.05), Color(1.0, 0.65, 0.05), 2.0)
+	_shared_brake_mesh = BoxMesh.new()
+	_shared_brake_mesh.size = Vector3(1.50, 0.18, 0.08)
+
+	_shared_siren_mesh = BoxMesh.new()
+	_shared_siren_mesh.size = Vector3(0.55, 0.24, 0.32)
 
 static func _make_emissive_mat(albedo: Color, em: Color, energy: float) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
@@ -85,6 +89,60 @@ static func _get_body_mat(col: Color) -> StandardMaterial3D:
 	m.metallic = 0.22
 	_body_mat_cache[key] = m
 	return m
+
+static func _get_baked_vehicle_mesh(vkind: VehicleKind, body_color: Color, vlen: float) -> ArrayMesh:
+	var key := "%d_%d" % [int(vkind), body_color.to_rgba32()]
+	if _baked_mesh_cache.has(key):
+		return _baked_mesh_cache[key]
+
+	var batch := MeshBatch.new()
+	var body_mat := _get_body_mat(body_color)
+	var w := 1.85
+	var h := 0.72
+	var l := vlen
+
+	if vkind == VehicleKind.TRUCK:
+		w = 2.15
+		batch.add_box(Vector3(0, 1.25, -l * 0.5 + 0.95), Vector3(w * 0.94, 1.85, 1.8), body_mat)
+		batch.add_box(Vector3(0, 1.55, -l * 0.5 + 0.02), Vector3(w * 0.84, 0.72, 0.12), _glass_mat)
+		batch.add_box(Vector3(0, 1.55, 0.98), Vector3(w, 2.35, l - 2.15), _cargo_mat)
+	elif vkind == VehicleKind.AMBULANCE:
+		w = 2.08
+		var amb_white := _get_body_mat(Color(0.96, 0.97, 0.99))
+		batch.add_box(Vector3(0, 1.12, 0), Vector3(w, 1.55, l), amb_white)
+		batch.add_box(Vector3(0, 0.95, 0.35), Vector3(w + 0.08, 0.24, l * 0.72), _amb_stripe_mat)
+		batch.add_box(Vector3(0, 1.94, 0.45), Vector3(0.95, 0.06, 0.28), _amb_stripe_mat)
+		batch.add_box(Vector3(0, 1.94, 0.45), Vector3(0.28, 0.06, 0.95), _amb_stripe_mat)
+		batch.add_box(Vector3(0, 1.48, -l * 0.5 - 0.02), Vector3(w * 0.86, 0.58, 0.10), _glass_mat)
+	else:
+		if vkind == VehicleKind.SUV:
+			w = 1.96
+			h = 0.82
+		batch.add_box(Vector3(0, 0.34 + h * 0.5, 0), Vector3(w, h, l), body_mat)
+		var cab_len := l * (0.60 if vkind == VehicleKind.SUV else 0.48)
+		var glass_h := 0.48 if vkind == VehicleKind.SUV else 0.42
+		var roof_h := 0.16
+		var cab_z := 0.22 if vkind == VehicleKind.SEDAN or vkind == VehicleKind.TAXI else 0.10
+		var chassis_top := 0.34 + h
+		batch.add_box(Vector3(0, chassis_top + glass_h * 0.5, cab_z), Vector3(w * 0.84, glass_h, cab_len * 0.94), _glass_mat)
+		batch.add_box(Vector3(0, chassis_top + glass_h + roof_h * 0.5, cab_z), Vector3(w * 0.88, roof_h, cab_len), body_mat)
+		if vkind == VehicleKind.TAXI:
+			batch.add_box(Vector3(0, chassis_top + glass_h + roof_h + 0.12, 0.10), Vector3(0.65, 0.22, 0.28), _taxi_sign_mat)
+
+	# 4 Wheels baked directly into the same vehicle mesh!
+	var wheel_z := l * 0.31
+	var wheel_x := w * 0.48
+	for sx in [-1.0, 1.0]:
+		for sz in [-1.0, 1.0]:
+			batch.add_cylinder(Vector3(float(sx) * wheel_x, 0.34, float(sz) * wheel_z), 0.34, 0.24, _wheel_mat, Vector3(0, 0, 90))
+
+	# Headlights baked directly into the same vehicle mesh!
+	for sx in [-1.0, 1.0]:
+		batch.add_box(Vector3(float(sx) * (w * 0.34), 0.64, -l * 0.5 - 0.05), Vector3(0.32, 0.18, 0.08), _head_mat)
+
+	var baked := batch.commit_multi_surface()
+	_baked_mesh_cache[key] = baked
+	return baked
 
 var approach_idx: int = 0       # 0=N, 1=S, 2=E, 3=W
 var lane_idx: int = 0
@@ -114,12 +172,10 @@ var wait_time: float = 0.0
 var has_passed_intersection: bool = false
 var finished: bool = false
 
-var _brake_meshes: Array[MeshInstance3D] = []
-var _turn_meshes: Array[MeshInstance3D] = []
+var _brake_mesh_node: MeshInstance3D
 var _siren_red_mesh: MeshInstance3D
 var _siren_blue_mesh: MeshInstance3D
 var _brake_lit: bool = false
-var _turn_lit: bool = false
 var _siren_phase: bool = false
 var _blink_accum: float = 0.0
 
@@ -224,89 +280,36 @@ func _apply_transform_at(dist: float) -> void:
 	basis = Basis(x_axis, Vector3.UP, z_axis)
 
 func _build_mesh(body_color: Color) -> void:
-	var body_mat := _get_body_mat(body_color)
+	# 1. Single shared pre-baked multi-surface MeshInstance3D for the entire vehicle body
+	var body_node := MeshInstance3D.new()
+	body_node.mesh = _get_baked_vehicle_mesh(kind, body_color, vehicle_length)
+	add_child(body_node)
 
-	var w := 1.85
-	var h := 0.72
-	var l := vehicle_length
+	# 2. Single lightweight shared rear brake bar (no shadow casting)
+	_brake_mesh_node = MeshInstance3D.new()
+	_brake_mesh_node.mesh = _shared_brake_mesh
+	_brake_mesh_node.material_override = _brake_off_mat
+	_brake_mesh_node.position = Vector3(0, 0.66, vehicle_length * 0.5 + 0.05)
+	_brake_mesh_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_brake_mesh_node)
 
-	if kind == VehicleKind.TRUCK:
-		w = 2.15
-		_add_part(Vector3(w * 0.94, 1.85, 1.8), Vector3(0, 1.25, -l * 0.5 + 0.95), body_mat)
-		_add_part(Vector3(w * 0.84, 0.72, 0.12), Vector3(0, 1.55, -l * 0.5 + 0.02), _glass_mat)
-		_add_part(Vector3(w, 2.35, l - 2.15), Vector3(0, 1.55, 0.98), _cargo_mat)
-	elif kind == VehicleKind.AMBULANCE:
-		w = 2.08
-		var amb_white := _get_body_mat(Color(0.96, 0.97, 0.99))
-		# Main van body
-		_add_part(Vector3(w, 1.55, l), Vector3(0, 1.12, 0), amb_white)
-		# Red emergency side/front trim stripe cleanly protruding outside van body
-		_add_part(Vector3(w + 0.08, 0.24, l * 0.72), Vector3(0, 0.95, 0.35), _amb_stripe_mat)
-		# Red cross on roof
-		_add_part(Vector3(0.95, 0.06, 0.28), Vector3(0, 1.94, 0.45), _amb_stripe_mat)
-		_add_part(Vector3(0.28, 0.06, 0.95), Vector3(0, 1.94, 0.45), _amb_stripe_mat)
-		# Front windshield
-		_add_part(Vector3(w * 0.86, 0.58, 0.10), Vector3(0, 1.48, -l * 0.5 - 0.02), _glass_mat)
-		# Flashing roof lightbar (Red left / Blue right)
-		_siren_red_mesh = _add_part(Vector3(0.55, 0.24, 0.32), Vector3(-0.34, 2.04, -l * 0.24), _siren_red_on)
-		_siren_blue_mesh = _add_part(Vector3(0.55, 0.24, 0.32), Vector3(0.34, 2.04, -l * 0.24), _siren_blue_off)
-	else:
-		if kind == VehicleKind.SUV:
-			w = 1.96
-			h = 0.82
-		_add_part(Vector3(w, h, l), Vector3(0, 0.34 + h * 0.5, 0), body_mat)
-		var cab_len := l * (0.60 if kind == VehicleKind.SUV else 0.48)
-		var glass_h := 0.48 if kind == VehicleKind.SUV else 0.42
-		var roof_h := 0.16
-		var cab_z := 0.22 if kind == VehicleKind.SEDAN or kind == VehicleKind.TAXI else 0.10
-		var chassis_top := 0.34 + h
-		_add_part(Vector3(w * 0.84, glass_h, cab_len * 0.94), Vector3(0, chassis_top + glass_h * 0.5, cab_z), _glass_mat)
-		_add_part(Vector3(w * 0.88, roof_h, cab_len), Vector3(0, chassis_top + glass_h + roof_h * 0.5, cab_z), body_mat)
+	# 3. Ambulance roof strobe beacons only on emergency vehicles
+	if is_emergency:
+		_siren_red_mesh = MeshInstance3D.new()
+		_siren_red_mesh.mesh = _shared_siren_mesh
+		_siren_red_mesh.material_override = _siren_red_on
+		_siren_red_mesh.position = Vector3(-0.34, 2.04, -vehicle_length * 0.24)
+		_siren_red_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(_siren_red_mesh)
 
-		if kind == VehicleKind.TAXI:
-			_add_part(Vector3(0.65, 0.22, 0.28), Vector3(0, chassis_top + glass_h + roof_h + 0.12, 0.10), _taxi_sign_mat)
+		_siren_blue_mesh = MeshInstance3D.new()
+		_siren_blue_mesh.mesh = _shared_siren_mesh
+		_siren_blue_mesh.material_override = _siren_blue_off
+		_siren_blue_mesh.position = Vector3(0.34, 2.04, -vehicle_length * 0.24)
+		_siren_blue_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(_siren_blue_mesh)
 
-	# 4 Wheels
-	var wheel_z := l * 0.31
-	var wheel_x := w * 0.48
-	for sx in [-1.0, 1.0]:
-		for sz in [-1.0, 1.0]:
-			var wh := MeshInstance3D.new()
-			var cm := CylinderMesh.new()
-			cm.top_radius = 0.34
-			cm.bottom_radius = 0.34
-			cm.height = 0.24
-			wh.mesh = cm
-			wh.material_override = _wheel_mat
-			wh.rotation_degrees = Vector3(0, 0, 90)
-			wh.position = Vector3(sx * wheel_x, 0.34, sz * wheel_z)
-			add_child(wh)
-
-	# Headlights (-Z front) & Brake lights (+Z rear)
-	for sx in [-1.0, 1.0]:
-		_add_part(Vector3(0.32, 0.18, 0.08), Vector3(sx * (w * 0.34), 0.64, -l * 0.5 - 0.05), _head_mat)
-		var bm := _add_part(Vector3(0.36, 0.18, 0.08), Vector3(sx * (w * 0.34), 0.66, l * 0.5 + 0.05), _brake_off_mat)
-		_brake_meshes.append(bm)
-
-	# Turn indicator light on turning side
-	if turn_type == TrafficController.TurnType.LEFT:
-		_turn_meshes.append(_add_part(Vector3(0.22, 0.16, 0.10), Vector3(-w * 0.42, 0.64, -l * 0.5 - 0.06), _turn_off_mat))
-		_turn_meshes.append(_add_part(Vector3(0.22, 0.16, 0.10), Vector3(-w * 0.42, 0.66, l * 0.5 + 0.06), _turn_off_mat))
-	elif turn_type == TrafficController.TurnType.RIGHT:
-		_turn_meshes.append(_add_part(Vector3(0.22, 0.16, 0.10), Vector3(w * 0.42, 0.64, -l * 0.5 - 0.06), _turn_off_mat))
-		_turn_meshes.append(_add_part(Vector3(0.22, 0.16, 0.10), Vector3(w * 0.42, 0.66, l * 0.5 + 0.06), _turn_off_mat))
-
-func _add_part(sz: Vector3, pos: Vector3, mat: StandardMaterial3D) -> MeshInstance3D:
-	var mi := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = sz
-	mi.mesh = bm
-	mi.material_override = mat
-	mi.position = pos
-	add_child(mi)
-	return mi
-
-func step_vehicle(delta: float, traffic_ctrl: TrafficController, all_vehicles: Array) -> void:
+func step_vehicle(delta: float, traffic_ctrl: TrafficController, nearby_vehicles: Array, in_box_vehicles: Array) -> void:
 	if finished:
 		return
 
@@ -319,13 +322,13 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, all_vehicles: A
 
 	var must_stop_dist := 9999.0
 
-	# 1. Traffic signal OR Roundabout yield-on-entry check (only before crossing stop/yield line)
+	# 1. Traffic signal OR Roundabout yield-on-entry check
 	var dist_to_stop := stop_progress - (progress + vehicle_length * 0.52)
 	if dist_to_stop > -0.8 and progress < stop_progress:
 		if is_roundabout:
 			if dist_to_stop < 12.0:
 				target_speed = min(target_speed, 9.5 if is_emergency else 7.8)
-			if dist_to_stop < 8.5 and _has_roundabout_conflict(all_vehicles):
+			if dist_to_stop < 8.5 and _has_roundabout_conflict(in_box_vehicles):
 				must_stop_dist = min(must_stop_dist, max(0.0, dist_to_stop))
 		else:
 			var aspect := traffic_ctrl.get_signal_for(approach_idx, turn_type)
@@ -338,21 +341,21 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, all_vehicles: A
 			elif aspect == TrafficController.Aspect.FLASHING_YELLOW:
 				if dist_to_stop < 12.0:
 					target_speed = min(target_speed, 5.5)
-				if dist_to_stop < 5.0 and _has_conflicting_in_box(all_vehicles):
+				if dist_to_stop < 5.0 and _has_conflicting_in_box(in_box_vehicles):
 					must_stop_dist = min(must_stop_dist, max(0.0, dist_to_stop))
 			elif traffic_ctrl.is_unprotected_left(approach_idx, turn_type):
-				if dist_to_stop < 6.0 and _has_oncoming_straight(all_vehicles):
+				if dist_to_stop < 6.0 and _has_oncoming_straight(in_box_vehicles):
 					must_stop_dist = min(must_stop_dist, max(0.0, dist_to_stop))
 
-	# 2. Car-following & collision avoidance against other vehicles
+	# 2. Spatial-grid car-following & collision avoidance (only checks nearby cells!)
 	var min_gap := 2.0
-	for other in all_vehicles:
+	for other in nearby_vehicles:
 		if other == self or other.finished:
 			continue
 		var other_v: SimVehicle = other
 		var rel: Vector3 = other_v.position - position
 		var dist_sq := rel.length_squared()
-		if dist_sq > 625.0:
+		if dist_sq > 576.0:
 			continue
 
 		var fwd_dist := rel.dot(forward)
@@ -372,7 +375,7 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, all_vehicles: A
 			if gap < must_stop_dist:
 				must_stop_dist = gap
 
-	# 3. Compute acceleration from target_speed and stopping distance
+	# 3. Smooth acceleration / braking
 	var desired_speed := target_speed
 	if must_stop_dist < 18.0:
 		if must_stop_dist <= 0.15:
@@ -406,14 +409,11 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, all_vehicles: A
 
 	_apply_transform_at(progress)
 
-func _has_roundabout_conflict(all_vehicles: Array) -> bool:
-	for other in all_vehicles:
+func _has_roundabout_conflict(in_box_vehicles: Array) -> bool:
+	for other in in_box_vehicles:
 		if other == self or other.finished:
 			continue
 		var other_v: SimVehicle = other
-		# Only yield to vehicles already circulating inside the roundabout ring
-		if other_v.progress < other_v.stop_progress - 1.5 or other_v.progress > other_v.exit_box_progress:
-			continue
 		if other_v.approach_idx == approach_idx and other_v.lane_idx == lane_idx:
 			continue
 		var to_entry := yield_world_pos - other_v.position
@@ -430,49 +430,37 @@ func _has_roundabout_conflict(all_vehicles: Array) -> bool:
 			return true
 	return false
 
-func _has_conflicting_in_box(all_vehicles: Array) -> bool:
-	for other in all_vehicles:
+func _has_conflicting_in_box(in_box_vehicles: Array) -> bool:
+	for other in in_box_vehicles:
 		if other == self or other.finished:
 			continue
 		var other_v: SimVehicle = other
 		if other_v.approach_idx == approach_idx:
 			continue
-		if other_v.progress >= other_v.stop_progress - 0.5 and other_v.progress <= other_v.exit_box_progress:
+		if other_v.progress >= other_v.stop_progress - 0.5:
 			return true
 	return false
 
-func _has_oncoming_straight(all_vehicles: Array) -> bool:
+func _has_oncoming_straight(in_box_vehicles: Array) -> bool:
 	var opp := 1 if approach_idx == 0 else (0 if approach_idx == 1 else (3 if approach_idx == 2 else 2))
-	for other in all_vehicles:
+	for other in in_box_vehicles:
 		if other == self or other.finished:
 			continue
 		var other_v: SimVehicle = other
 		if other_v.approach_idx == opp and other_v.turn_type != TrafficController.TurnType.LEFT:
-			var d_stop: float = other_v.stop_progress - other_v.progress
-			if other_v.progress <= other_v.exit_box_progress and d_stop < 15.0 and other_v.speed > 1.5:
+			if other_v.speed > 1.5:
 				return true
 	return false
 
 func _update_lights(delta: float, braking: bool) -> void:
-	if braking != _brake_lit:
+	if braking != _brake_lit and _brake_mesh_node != null:
 		_brake_lit = braking
-		var m := _brake_on_mat if braking else _brake_off_mat
-		for mesh_node in _brake_meshes:
-			mesh_node.material_override = m
+		_brake_mesh_node.material_override = _brake_on_mat if braking else _brake_off_mat
 
-	_blink_accum += delta
 	if is_emergency and _siren_red_mesh != null and _siren_blue_mesh != null:
+		_blink_accum += delta
 		var sp := fmod(_blink_accum, 0.36) < 0.18
 		if sp != _siren_phase:
 			_siren_phase = sp
 			_siren_red_mesh.material_override = _siren_red_on if sp else _siren_red_off
 			_siren_blue_mesh.material_override = _siren_blue_off if sp else _siren_blue_on
-
-	if turn_type != TrafficController.TurnType.STRAIGHT and not _turn_meshes.is_empty():
-		var near_turn := (progress > stop_progress - 18.0 and progress < exit_box_progress + 2.0)
-		var lit := near_turn and fmod(_blink_accum, 0.7) < 0.35
-		if lit != _turn_lit:
-			_turn_lit = lit
-			var tm := _turn_on_mat if lit else _turn_off_mat
-			for mesh_node in _turn_meshes:
-				mesh_node.material_override = tm

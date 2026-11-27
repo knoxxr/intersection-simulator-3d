@@ -3,7 +3,8 @@ class_name VehicleSpawner
 
 const LANE_WIDTH: float = 3.5
 const SPAWN_DIST: float = 110.0
-const MAX_VEHICLES: int = 220
+const MAX_VEHICLES: int = 180
+const GRID_CELL: float = 16.0
 
 # Live configurable simulation settings (1..10 lanes per direction, Signalized or Roundabout)
 var ns_lanes: int = 2
@@ -18,6 +19,8 @@ var right_turn_ratio: float = 0.20
 
 var spawn_timers: Array[float] = [0.4, 0.9, 1.4, 1.9]
 var active_vehicles: Array[SimVehicle] = []
+var _spatial_grid: Dictionary = {}
+var _in_box_vehicles: Array = []
 
 signal vehicle_passed(wait_time: float)
 
@@ -35,8 +38,11 @@ var _palette: Array[Color] = [
 func clear_all_vehicles() -> void:
 	for v in active_vehicles:
 		if is_instance_valid(v):
+			remove_child(v)
 			v.queue_free()
 	active_vehicles.clear()
+	_spatial_grid.clear()
+	_in_box_vehicles.clear()
 
 func get_waiting_counts_by_dir() -> Array[int]:
 	var counts: Array[int] = [0, 0, 0, 0]
@@ -106,6 +112,33 @@ func spawn_ambulance(preferred_approach: int = -1) -> bool:
 		return true
 	return false
 
+func _rebuild_spatial_grid() -> void:
+	_spatial_grid.clear()
+	_in_box_vehicles.clear()
+	for v in active_vehicles:
+		if not is_instance_valid(v) or v.finished:
+			continue
+		var cx := int(floorf(v.position.x / GRID_CELL))
+		var cz := int(floorf(v.position.z / GRID_CELL))
+		var key := Vector2i(cx, cz)
+		if not _spatial_grid.has(key):
+			_spatial_grid[key] = []
+		_spatial_grid[key].append(v)
+		# Track vehicles approaching/inside the intersection or roundabout box
+		if v.progress <= v.exit_box_progress and (v.stop_progress - v.progress) < 16.0:
+			_in_box_vehicles.append(v)
+
+func _get_nearby_vehicles(pos: Vector3) -> Array:
+	var cx := int(floorf(pos.x / GRID_CELL))
+	var cz := int(floorf(pos.z / GRID_CELL))
+	var result: Array = []
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			var key := Vector2i(cx + dx, cz + dz)
+			if _spatial_grid.has(key):
+				result.append_array(_spatial_grid[key])
+	return result
+
 func step_simulation(delta: float, traffic_ctrl: TrafficController) -> void:
 	for a in range(4):
 		if not approach_enabled[a]:
@@ -117,11 +150,12 @@ func step_simulation(delta: float, traffic_ctrl: TrafficController) -> void:
 		spawn_timers[a] -= delta * rate
 		if spawn_timers[a] <= 0.0:
 			var l_cnt := ns_lanes if (a == 0 or a == 1) else ew_lanes
-			# Scale spawn frequency smoothly up for wide multi-lane (up to 10 lanes) roads
 			var lane_factor := 1.0 / (0.55 + 0.45 * float(l_cnt))
 			spawn_timers[a] = randf_range(1.4, 2.7) * lane_factor
 			if active_vehicles.size() < MAX_VEHICLES:
 				_try_spawn_on_approach(a)
+
+	_rebuild_spatial_grid()
 
 	var i := active_vehicles.size() - 1
 	while i >= 0:
@@ -130,9 +164,11 @@ func step_simulation(delta: float, traffic_ctrl: TrafficController) -> void:
 			active_vehicles.remove_at(i)
 			i -= 1
 			continue
-		v.step_vehicle(delta, traffic_ctrl, active_vehicles)
+		var nearby := _get_nearby_vehicles(v.position)
+		v.step_vehicle(delta, traffic_ctrl, nearby, _in_box_vehicles)
 		if v.finished:
 			vehicle_passed.emit(v.wait_time)
+			remove_child(v)
 			v.queue_free()
 			active_vehicles.remove_at(i)
 		i -= 1
