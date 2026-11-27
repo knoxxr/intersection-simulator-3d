@@ -40,17 +40,62 @@ static func _ensure_shared_meshes() -> void:
 	_shared_arrow_front = _bake_arrow_mesh(1.0)
 
 static func _bake_arrow_mesh(dir_x: float) -> ArrayMesh:
-	# Builds a crisp 3D left-turn arrow pointing toward dir_x (+X on front -Z face = driver's left)
-	var batch := MeshBatch.new()
-	var dummy_mat := StandardMaterial3D.new()
-	# Horizontal shaft
-	batch.add_box(Vector3(-dir_x * 0.03, 0.0, 0.0), Vector3(0.32, 0.095, 0.055), dummy_mat)
-	# Upper & lower diagonal arrowhead wings
-	var tip_x := dir_x * 0.17
-	var wing_x := tip_x - dir_x * 0.085
-	batch.add_box(Vector3(wing_x, 0.085, 0.0), Vector3(0.24, 0.088, 0.055), dummy_mat, Vector3(0.0, 0.0, -dir_x * 44.0))
-	batch.add_box(Vector3(wing_x, -0.085, 0.0), Vector3(0.24, 0.088, 0.055), dummy_mat, Vector3(0.0, 0.0, dir_x * 44.0))
-	return batch.commit_multi_surface()
+	# Builds a razor-sharp 3D left-turn arrow (←) on the -Z front face pointing toward dir_x (+X = driver's left)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var zf := -0.025 # front face toward approaching driver (-Z)
+	var zb := 0.025  # back face into housing (+Z)
+
+	# Helper to add front-facing (-Z) triangle with exact Godot CW winding: (v1-v0).cross(v2-v0).z >= 0 for -Z normal
+	var add_tri := func(p0: Vector3, p1: Vector3, p2: Vector3, n_dir: Vector3) -> void:
+		var n := n_dir.normalized()
+		st.set_normal(n)
+		st.set_uv(Vector2.ZERO)
+		if (p1 - p0).cross(p2 - p0).dot(n) <= 0.0:
+			st.add_vertex(p0)
+			st.add_vertex(p1)
+			st.add_vertex(p2)
+		else:
+			st.add_vertex(p0)
+			st.add_vertex(p2)
+			st.add_vertex(p1)
+
+	var add_quad := func(p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3, n_dir: Vector3) -> void:
+		add_tri.call(p0, p1, p2, n_dir)
+		add_tri.call(p0, p2, p3, n_dir)
+
+	# 1. Arrowhead triangle: tip at (dir_x * 0.21, 0), base at (dir_x * 0.01, ±0.165)
+	var tip_f := Vector3(dir_x * 0.21, 0.0, zf)
+	var top_f := Vector3(dir_x * 0.01, 0.165, zf)
+	var bot_f := Vector3(dir_x * 0.01, -0.165, zf)
+	var tip_b := Vector3(dir_x * 0.21, 0.0, zb)
+	var top_b := Vector3(dir_x * 0.01, 0.165, zb)
+	var bot_b := Vector3(dir_x * 0.01, -0.165, zb)
+
+	add_tri.call(tip_f, top_f, bot_f, Vector3(0, 0, -1))
+	add_quad.call(tip_f, top_f, top_b, tip_b, Vector3(dir_x * 0.165, 0.20, 0.0))
+	add_quad.call(bot_f, tip_f, tip_b, bot_b, Vector3(dir_x * 0.165, -0.20, 0.0))
+	add_quad.call(top_f, bot_f, bot_b, top_b, Vector3(-dir_x, 0.0, 0.0))
+
+	# 2. Horizontal shaft rectangle: x from (dir_x * 0.02) back to (-dir_x * 0.19), y in [-0.048, +0.048]
+	var sx0 := dir_x * 0.02
+	var sx1 := -dir_x * 0.19
+	var sy := 0.048
+	var s0f := Vector3(sx0, sy, zf)
+	var s1f := Vector3(sx1, sy, zf)
+	var s2f := Vector3(sx1, -sy, zf)
+	var s3f := Vector3(sx0, -sy, zf)
+	var s0b := Vector3(sx0, sy, zb)
+	var s1b := Vector3(sx1, sy, zb)
+	var s2b := Vector3(sx1, -sy, zb)
+	var s3b := Vector3(sx0, -sy, zb)
+
+	add_quad.call(s0f, s1f, s2f, s3f, Vector3(0, 0, -1))
+	add_quad.call(s0f, s1f, s1b, s0b, Vector3(0, 1, 0))
+	add_quad.call(s2f, s3f, s3b, s2b, Vector3(0, -1, 0))
+	add_quad.call(s1f, s2f, s2b, s1b, Vector3(-dir_x, 0, 0))
+
+	return st.commit()
 
 func _ready() -> void:
 	if not _pole_built:

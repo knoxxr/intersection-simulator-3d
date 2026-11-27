@@ -62,17 +62,17 @@ func _get_poly_st(mat: Material) -> SurfaceTool:
 
 func add_box(pos: Vector3, sz: Vector3, mat: Material, rot_deg: Vector3 = Vector3.ZERO) -> void:
 	_ensure_units()
-	var b := Basis.from_euler(rot_deg * (PI / 180.0)).scaled(sz)
+	var b := Basis.from_euler(rot_deg * (PI / 180.0)) * Basis.from_scale(sz)
 	_get_mesh_st(mat).append_from(_unit_box, 0, Transform3D(b, pos))
 
 func add_plane_xz(pos: Vector3, sz_xz: Vector2, mat: Material, rot_y_rad: float = 0.0) -> void:
 	_ensure_units()
-	var b := Basis(Vector3.UP, rot_y_rad).scaled(Vector3(sz_xz.x, 1.0, sz_xz.y))
+	var b := Basis(Vector3.UP, rot_y_rad) * Basis.from_scale(Vector3(sz_xz.x, 1.0, sz_xz.y))
 	_get_mesh_st(mat).append_from(_unit_plane, 0, Transform3D(b, pos))
 
 func add_cylinder(pos: Vector3, radius: float, height: float, mat: Material, rot_deg: Vector3 = Vector3.ZERO, smooth: bool = false) -> void:
 	_ensure_units()
-	var b := Basis.from_euler(rot_deg * (PI / 180.0)).scaled(Vector3(radius * 2.0, height, radius * 2.0))
+	var b := Basis.from_euler(rot_deg * (PI / 180.0)) * Basis.from_scale(Vector3(radius * 2.0, height, radius * 2.0))
 	var src := _unit_cyl_smooth if smooth else _unit_cyl
 	_get_mesh_st(mat).append_from(src, 0, Transform3D(b, pos))
 
