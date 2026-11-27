@@ -181,6 +181,9 @@ var _body_pivot: Node3D
 
 var is_waiting: bool = false
 var wait_time: float = 0.0
+var had_stop: bool = false
+var travel_time: float = 0.0
+var level_tag: int = 0 # 1 = Overpass, 0 = Surface, -1 = Underpass
 var stuck_timer: float = 0.0
 var has_passed_intersection: bool = false
 var finished: bool = false
@@ -560,6 +563,7 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, nearby_vehicles
 
 	var braking := (current_accel < -0.65) or (speed < 0.45 and has_leader and must_stop_dist < 6.0)
 
+	travel_time += delta
 	progress += speed * delta
 	if not has_passed_intersection and progress >= exit_box_progress:
 		has_passed_intersection = true
@@ -567,6 +571,9 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, nearby_vehicles
 	is_waiting = (speed < 0.6 and not has_passed_intersection)
 	if is_waiting:
 		wait_time += delta
+		had_stop = true
+	elif speed < 0.85 and not has_passed_intersection:
+		had_stop = true
 
 	_update_lights(delta, braking)
 
@@ -575,6 +582,10 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, nearby_vehicles
 		return
 
 	_apply_visual_transform(progress, delta, false)
+	if position.y > 2.5:
+		level_tag = 1
+	elif position.y < -2.5:
+		level_tag = -1
 
 func _should_yield_to_crossing(other_v: SimVehicle, rel: Vector3) -> bool:
 	if is_emergency and not other_v.is_emergency:

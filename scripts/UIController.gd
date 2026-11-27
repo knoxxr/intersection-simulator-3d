@@ -5,6 +5,7 @@ var sim: IntersectionMain
 var _is_mobile: bool = false
 var _ui_built: bool = false
 var _drawer_open: bool = false
+var _stats_open: bool = false
 var _active_mobile_tab: int = 0
 var _camera_preset_idx: int = 0
 var _ui_refresh_timer: float = 0.0
@@ -21,6 +22,8 @@ var _hist_tp: PackedFloat32Array = PackedFloat32Array()
 # Dynamic widget refs
 var panel_container: PanelContainer
 var toggle_panel_btn: Button
+var stats_drawer: PanelContainer
+var stats_toggle_btn: Button
 var floating_controls: VBoxContainer
 var lane_checkboxes: Array[CheckBox] = []
 var ns_lane_btns: Array[Button] = []
@@ -31,13 +34,21 @@ var pause_btn: Button
 var mobile_tab_btns: Array[Button] = []
 var mobile_tab_pages: Array[Control] = []
 var metrics_graph: MetricsGraph
+var dir_bars: DirectionBars
 
-# Telemetry labels
+# Telemetry labels & badges
 var lbl_phase: Label
 var lbl_counts: Label
 var lbl_perf: Label
+var lbl_perf2: Label
 var lbl_leg_tp: Label
 var lbl_leg_wait: Label
+var los_badge_lbl: Label
+var _los_badge_style: StyleBoxFlat
+var lbl_turns: Label
+var lbl_levels: Label
+var lbl_co2: Label
+var snap_list_box: VBoxContainer
 
 # Reusable theme styles
 var _style_panel: StyleBoxFlat
@@ -234,8 +245,18 @@ func _clear_ui() -> void:
 	lbl_phase = null
 	lbl_counts = null
 	lbl_perf = null
+	lbl_perf2 = null
 	lbl_leg_tp = null
 	lbl_leg_wait = null
+	stats_drawer = null
+	stats_toggle_btn = null
+	dir_bars = null
+	los_badge_lbl = null
+	_los_badge_style = null
+	lbl_turns = null
+	lbl_levels = null
+	lbl_co2 = null
+	snap_list_box = null
 
 func _style_button(btn: Button, active: bool = false, min_h: int = 34, font_sz: int = 13, danger: bool = false) -> void:
 	btn.custom_minimum_size.y = min_h
@@ -438,6 +459,7 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	page_sim.add_theme_constant_override("separation", 10)
 	_populate_sim_camera_controls(page_sim, true)
 	_add_graph_block(page_sim)
+	_populate_detailed_stats(page_sim, true)
 	pages_host.add_child(page_sim)
 
 	mobile_tab_pages = [page_preset, page_lanes, page_traffic, page_signals, page_sim]
@@ -547,23 +569,45 @@ func _build_desktop_ui() -> void:
 	var hud := PanelContainer.new()
 	hud.anchor_left = 1.0
 	hud.anchor_right = 1.0
-	hud.offset_left = -336
+	hud.offset_left = -356
 	hud.offset_right = -14
 	hud.offset_top = 12
-	hud.offset_bottom = 250
+	hud.offset_bottom = 266
 	hud.mouse_filter = Control.MOUSE_FILTER_STOP
 	hud.add_theme_stylebox_override("panel", _style_panel)
 	add_child(hud)
 
 	var hud_v := VBoxContainer.new()
-	hud_v.add_theme_constant_override("separation", 5)
+	hud_v.add_theme_constant_override("separation", 4)
 	hud.add_child(hud_v)
+
+	var hud_head := HBoxContainer.new()
+	hud_head.add_theme_constant_override("separation", 6)
+	hud_v.add_child(hud_head)
 
 	var hud_title := Label.new()
 	hud_title.text = Lang.t("hud_title")
+	hud_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hud_title.add_theme_font_size_override("font_size", 14)
 	hud_title.add_theme_color_override("font_color", Color(0.55, 0.85, 1.0))
-	hud_v.add_child(hud_title)
+	hud_head.add_child(hud_title)
+
+	var los_panel := PanelContainer.new()
+	_los_badge_style = _make_box(Color(0.16, 0.88, 0.48, 0.24), Color(0.16, 0.88, 0.48, 0.95), 6, 7, 2)
+	los_panel.add_theme_stylebox_override("panel", _los_badge_style)
+	hud_head.add_child(los_panel)
+
+	los_badge_lbl = Label.new()
+	los_badge_lbl.text = "LOS A"
+	los_badge_lbl.add_theme_font_size_override("font_size", 12)
+	los_badge_lbl.add_theme_color_override("font_color", Color(0.16, 0.88, 0.48))
+	los_panel.add_child(los_badge_lbl)
+
+	stats_toggle_btn = Button.new()
+	stats_toggle_btn.text = Lang.t("btn_stats")
+	_style_button(stats_toggle_btn, _stats_open, 24, 11)
+	stats_toggle_btn.pressed.connect(_on_toggle_stats_drawer)
+	hud_head.add_child(stats_toggle_btn)
 
 	lbl_phase = Label.new()
 	lbl_phase.text = "-"
@@ -581,7 +625,40 @@ func _build_desktop_ui() -> void:
 	lbl_perf.add_theme_color_override("font_color", Color(0.84, 0.90, 0.96))
 	hud_v.add_child(lbl_perf)
 
+	lbl_perf2 = Label.new()
+	lbl_perf2.text = ""
+	lbl_perf2.add_theme_font_size_override("font_size", 11)
+	lbl_perf2.add_theme_color_override("font_color", Color(0.66, 0.88, 0.94))
+	hud_v.add_child(lbl_perf2)
+
 	_add_graph_block(hud_v)
+
+	# 3b. Expandable Detailed Analytics & A/B Comparison Drawer (below HUD)
+	stats_drawer = PanelContainer.new()
+	stats_drawer.anchor_left = 1.0
+	stats_drawer.anchor_right = 1.0
+	stats_drawer.anchor_bottom = 1.0
+	stats_drawer.offset_left = -356
+	stats_drawer.offset_right = -14
+	stats_drawer.offset_top = 274
+	stats_drawer.offset_bottom = -50
+	stats_drawer.mouse_filter = Control.MOUSE_FILTER_STOP
+	stats_drawer.visible = _stats_open
+	stats_drawer.add_theme_stylebox_override("panel", _style_panel)
+	add_child(stats_drawer)
+
+	var stats_scroll := ScrollContainer.new()
+	stats_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stats_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	stats_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	stats_drawer.add_child(stats_scroll)
+
+	var stats_v := VBoxContainer.new()
+	stats_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stats_v.add_theme_constant_override("separation", 6)
+	stats_scroll.add_child(stats_v)
+
+	_populate_detailed_stats(stats_v, false)
 
 	# 4. Bottom-Right Controls Hint
 	var hint := PanelContainer.new()
@@ -648,6 +725,174 @@ func _on_toggle_desktop_panel() -> void:
 		panel_container.visible = _drawer_open
 	if toggle_panel_btn:
 		toggle_panel_btn.text = Lang.t("panel_hide") if _drawer_open else Lang.t("panel_show")
+
+func _on_toggle_stats_drawer() -> void:
+	_stats_open = not _stats_open
+	if stats_drawer:
+		stats_drawer.visible = _stats_open
+	if stats_toggle_btn:
+		_style_button(stats_toggle_btn, _stats_open, 24, 11)
+
+func _populate_detailed_stats(parent: VBoxContainer, touch: bool) -> void:
+	var fsz := 12 if touch else 11
+	var btn_h := 36 if touch else 26
+
+	var sec_dir := Label.new()
+	sec_dir.text = Lang.t("sec_dir_bars")
+	sec_dir.add_theme_font_size_override("font_size", fsz + 1)
+	sec_dir.add_theme_color_override("font_color", Color(0.55, 0.85, 1.0))
+	parent.add_child(sec_dir)
+
+	dir_bars = DirectionBars.new()
+	dir_bars.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	dir_bars.custom_minimum_size = Vector2(240, 92 if touch else 84)
+	parent.add_child(dir_bars)
+
+	lbl_turns = Label.new()
+	lbl_turns.text = Lang.t("stat_turns") % [0.0, 0.0, 0.0]
+	lbl_turns.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lbl_turns.add_theme_font_size_override("font_size", fsz)
+	lbl_turns.add_theme_color_override("font_color", Color(0.86, 0.91, 0.97))
+	parent.add_child(lbl_turns)
+
+	lbl_levels = Label.new()
+	lbl_levels.text = Lang.t("stat_levels") % [0.0, 100.0, 0.0]
+	lbl_levels.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lbl_levels.add_theme_font_size_override("font_size", fsz)
+	lbl_levels.add_theme_color_override("font_color", Color(0.74, 0.88, 0.96))
+	parent.add_child(lbl_levels)
+
+	lbl_co2 = Label.new()
+	lbl_co2.text = Lang.t("stat_co2") % [0.0, 0.0]
+	lbl_co2.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lbl_co2.add_theme_font_size_override("font_size", fsz)
+	lbl_co2.add_theme_color_override("font_color", Color(0.95, 0.82, 0.56))
+	parent.add_child(lbl_co2)
+
+	var sep := HSeparator.new()
+	parent.add_child(sep)
+
+	var sec_snap := Label.new()
+	sec_snap.text = Lang.t("sec_snapshots")
+	sec_snap.add_theme_font_size_override("font_size", fsz + 1)
+	sec_snap.add_theme_color_override("font_color", Color(0.55, 0.85, 1.0))
+	parent.add_child(sec_snap)
+
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 5)
+	parent.add_child(btn_row)
+
+	var save_btn := Button.new()
+	save_btn.text = Lang.t("btn_save_snap")
+	save_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(save_btn, true, btn_h, fsz)
+	save_btn.pressed.connect(func():
+		sim.save_snapshot()
+		_rebuild_snapshot_list(touch)
+	)
+	btn_row.add_child(save_btn)
+
+	var clear_btn := Button.new()
+	clear_btn.text = Lang.t("btn_clear_snap")
+	_style_button(clear_btn, false, btn_h, fsz)
+	clear_btn.pressed.connect(func():
+		sim.clear_snapshots()
+		_rebuild_snapshot_list(touch)
+	)
+	btn_row.add_child(clear_btn)
+
+	var csv_btn := Button.new()
+	csv_btn.text = Lang.t("btn_csv")
+	_style_button(csv_btn, false, btn_h, fsz)
+	csv_btn.pressed.connect(func():
+		sim.download_csv_report()
+	)
+	btn_row.add_child(csv_btn)
+
+	snap_list_box = VBoxContainer.new()
+	snap_list_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	snap_list_box.add_theme_constant_override("separation", 4)
+	parent.add_child(snap_list_box)
+
+	_rebuild_snapshot_list(touch)
+
+func _rebuild_snapshot_list(touch: bool) -> void:
+	if not is_instance_valid(snap_list_box) or sim == null:
+		return
+	for child in snap_list_box.get_children():
+		child.queue_free()
+
+	var fsz := 11 if touch else 10
+	if sim.snapshots.is_empty():
+		var empty_lbl := Label.new()
+		empty_lbl.text = Lang.t("snap_empty")
+		empty_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		empty_lbl.add_theme_font_size_override("font_size", fsz)
+		empty_lbl.add_theme_color_override("font_color", Color(0.62, 0.70, 0.80))
+		snap_list_box.add_child(empty_lbl)
+		return
+
+	var base: Dictionary = sim.snapshots[0]
+	var base_tp: float = maxf(1.0, float(base["throughput"]))
+	var base_w: float = maxf(0.1, float(base["avg_wait"]))
+
+	for i in range(sim.snapshots.size()):
+		var s: Dictionary = sim.snapshots[i]
+		var card := PanelContainer.new()
+		var card_bg := Color(0.11, 0.16, 0.24, 0.88) if i == 0 else Color(0.08, 0.11, 0.16, 0.84)
+		var card_bd := Color(0.32, 0.56, 0.82, 0.75) if i == 0 else Color(0.24, 0.32, 0.44, 0.60)
+		card.add_theme_stylebox_override("panel", _make_box(card_bg, card_bd, 6, 8, 4))
+		snap_list_box.add_child(card)
+
+		var cv := VBoxContainer.new()
+		cv.add_theme_constant_override("separation", 2)
+		card.add_child(cv)
+
+		var head := HBoxContainer.new()
+		head.add_theme_constant_override("separation", 4)
+		cv.add_child(head)
+
+		var lbl_name := Label.new()
+		lbl_name.text = "#%d %s" % [i + 1, str(s["label"])]
+		lbl_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl_name.add_theme_font_size_override("font_size", fsz + 1)
+		lbl_name.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
+		head.add_child(lbl_name)
+
+		var los_g := str(s["los"])
+		var lbl_los := Label.new()
+		lbl_los.text = "LOS %s" % los_g
+		lbl_los.add_theme_font_size_override("font_size", fsz + 1)
+		lbl_los.add_theme_color_override("font_color", IntersectionMain.get_los_color(los_g))
+		head.add_child(lbl_los)
+
+		var tp := float(s["throughput"])
+		var aw := float(s["avg_wait"])
+		var ns := float(s["nonstop"])
+		var detail := Label.new()
+		detail.text = "%.0f/m | %.1fs | P95 %.1fs | NS %.0f%%" % [tp, aw, float(s["p95_wait"]), ns]
+		detail.add_theme_font_size_override("font_size", fsz)
+		detail.add_theme_color_override("font_color", Color(0.78, 0.85, 0.92))
+		cv.add_child(detail)
+
+		if i > 0:
+			var d_tp_pct := ((tp - float(base["throughput"])) / base_tp) * 100.0
+			var d_w_pct := ((aw - float(base["avg_wait"])) / base_w) * 100.0
+			var delta_row := HBoxContainer.new()
+			delta_row.add_theme_constant_override("separation", 8)
+			cv.add_child(delta_row)
+
+			var l_dtp := Label.new()
+			l_dtp.text = "ΔTP %+.0f%%" % d_tp_pct
+			l_dtp.add_theme_font_size_override("font_size", fsz)
+			l_dtp.add_theme_color_override("font_color", Color(0.24, 0.90, 0.52) if d_tp_pct >= 0.0 else Color(0.98, 0.42, 0.36))
+			delta_row.add_child(l_dtp)
+
+			var l_dw := Label.new()
+			l_dw.text = "ΔWait %+.0f%%" % d_w_pct
+			l_dw.add_theme_font_size_override("font_size", fsz)
+			l_dw.add_theme_color_override("font_color", Color(0.24, 0.90, 0.52) if d_w_pct <= 0.0 else Color(0.98, 0.42, 0.36))
+			delta_row.add_child(l_dw)
 
 # ==============================================================================
 # SHARED CONTROL BUILDERS
@@ -1205,20 +1450,58 @@ func _refresh_metrics() -> void:
 	var is_em: bool = m["emergency"]
 	lbl_phase.add_theme_color_override("font_color", Color(1.0, 0.42, 0.36) if is_em else Color(0.55, 0.88, 1.0))
 
+	var los_grade: String = str(m["los"])
+	var los_col := IntersectionMain.get_los_color(los_grade)
+	if is_instance_valid(los_badge_lbl):
+		los_badge_lbl.text = "LOS %s" % los_grade
+		los_badge_lbl.add_theme_color_override("font_color", los_col)
+	if _los_badge_style != null:
+		_los_badge_style.bg_color = Color(los_col.r, los_col.g, los_col.b, 0.22)
+		_los_badge_style.border_color = Color(los_col.r, los_col.g, los_col.b, 0.92)
+
 	if is_instance_valid(lbl_leg_tp):
 		lbl_leg_tp.text = "%s: %.0f" % [Lang.t("graph_tp"), m["throughput"]]
 	if is_instance_valid(lbl_leg_wait):
 		lbl_leg_wait.text = "%s: %d" % [Lang.t("graph_wait"), m["waiting"]]
 
 	if _is_mobile:
-		if lbl_counts:
+		if is_instance_valid(lbl_counts):
 			lbl_counts.text = Lang.t("hud_mobile_stats") % [
-				m["active"], m["waiting"], m["passed"], m["throughput"], m["avg_wait"]
+				los_grade, m["active"], m["waiting"], m["throughput"], m["avg_wait_60s"]
 			]
 	else:
-		if lbl_counts:
+		if is_instance_valid(lbl_counts):
 			lbl_counts.text = Lang.t("hud_counts_pc") % [m["active"], m["waiting"]]
-		if lbl_perf:
+		if is_instance_valid(lbl_perf):
 			lbl_perf.text = Lang.t("hud_perf_pc") % [
-				m["passed"], m["throughput"], m["avg_wait"]
+				m["passed"], m["throughput"], m["avg_wait_60s"]
 			]
+		if is_instance_valid(lbl_perf2):
+			lbl_perf2.text = Lang.t("hud_perf_pc2") % [
+				m["p95_wait"], m["avg_speed_kmh"], m["nonstop_pct"]
+			]
+
+	if is_instance_valid(dir_bars):
+		dir_bars.set_data(m["dir_waits"], m["dir_max_queue"], m["dir_avg_wait"])
+
+	if is_instance_valid(lbl_turns):
+		var tw: Array = m["turn_avg_wait"]
+		lbl_turns.text = Lang.t("stat_turns") % [float(tw[0]), float(tw[1]), float(tw[2])]
+
+	if is_instance_valid(lbl_levels):
+		var lc: Dictionary = m["level_counts"]
+		var lv_over := float(lc.get("over", 0))
+		var lv_surf := float(lc.get("surf", 0))
+		var lv_under := float(lc.get("under", 0))
+		var lv_tot := lv_over + lv_surf + lv_under
+		if lv_tot > 0.0:
+			lbl_levels.text = Lang.t("stat_levels") % [
+				(lv_over / lv_tot) * 100.0,
+				(lv_surf / lv_tot) * 100.0,
+				(lv_under / lv_tot) * 100.0
+			]
+		else:
+			lbl_levels.text = Lang.t("stat_levels") % [0.0, 0.0, 0.0]
+
+	if is_instance_valid(lbl_co2):
+		lbl_co2.text = Lang.t("stat_co2") % [float(m["idle_co2_kgh"]), float(m["max_wait"])]

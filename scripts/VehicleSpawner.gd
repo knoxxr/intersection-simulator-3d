@@ -25,7 +25,7 @@ var active_vehicles: Array[SimVehicle] = []
 var _spatial_grid: Dictionary = {}
 var _in_box_vehicles: Array = []
 
-signal vehicle_passed(wait_time: float)
+signal vehicle_passed(info: Dictionary)
 
 var _palette: Array[Color] = [
 	Color(0.18, 0.48, 0.85),
@@ -171,7 +171,15 @@ func step_simulation(delta: float, traffic_ctrl: TrafficController) -> void:
 		var nearby := _get_nearby_vehicles(v.position)
 		v.step_vehicle(delta, traffic_ctrl, nearby, _in_box_vehicles)
 		if v.finished:
-			vehicle_passed.emit(v.wait_time)
+			var avg_kmh := 0.0 if v.travel_time < 0.1 else clampf((v.total_length / v.travel_time) * 3.6, 0.0, 120.0)
+			vehicle_passed.emit({
+				"wait": v.wait_time,
+				"approach": v.approach_idx,
+				"turn": v.turn_type,
+				"stopped": v.had_stop,
+				"speed_kmh": avg_kmh,
+				"level": v.level_tag
+			})
 			remove_child(v)
 			v.queue_free()
 			active_vehicles.remove_at(i)
