@@ -4,7 +4,6 @@ class_name TrafficLight
 enum SignalColor { RED, YELLOW, GREEN, OFF }
 
 static var _shared_arrow_front: ArrayMesh
-static var _shared_arrow_back: ArrayMesh
 static var _shared_disc_mesh: CylinderMesh
 static var _shared_backing_mesh: CylinderMesh
 static var _shared_visor_mesh: BoxMesh
@@ -39,7 +38,6 @@ static func _ensure_shared_meshes() -> void:
 	_shared_visor_mesh.size = Vector3(0.62, 0.06, 0.26)
 
 	_shared_arrow_front = _bake_arrow_mesh(1.0)
-	_shared_arrow_back = _bake_arrow_mesh(-1.0)
 
 static func _bake_arrow_mesh(dir_x: float) -> ArrayMesh:
 	# Builds a crisp 3D left-turn arrow pointing toward dir_x (+X on front -Z face = driver's left)
@@ -114,58 +112,47 @@ func _build_mesh() -> void:
 	left_mat = _create_bulb_mat(Color(0.04, 0.16, 0.07))
 	green_mat = _create_bulb_mat(Color(0.03, 0.18, 0.06))
 
+	# Single-sided front face (-Z) facing approaching traffic only; solid dark backplate on rear (+Z).
 	# Standard Korean 4-lens horizontal order (driver's Left -> Right): [RED] [YELLOW] [← LEFT] [GREEN]
-	# On front face (-Z), +X is driver's left and -X is driver's right.
 	var offsets := [1.14, 0.38, -0.38, -1.14]
 	var mats := [red_mat, yellow_mat, left_mat, green_mat]
 
 	for i in range(4):
 		var ox: float = offsets[i]
 
-		# Top sun visors over each lens (front & back)
-		for side_z in [-1.0, 1.0]:
-			var fz: float = float(side_z)
-			var visor := MeshInstance3D.new()
-			visor.mesh = _shared_visor_mesh
-			visor.material_override = housing_mat
-			visor.position = Vector3(ox, 0.34, fz * 0.31)
-			visor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			_housing_root.add_child(visor)
+		# Top sun visor on front (-Z) face only
+		var visor := MeshInstance3D.new()
+		visor.mesh = _shared_visor_mesh
+		visor.material_override = housing_mat
+		visor.position = Vector3(ox, 0.34, -0.31)
+		visor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_housing_root.add_child(visor)
 
-			# Dark circular recessed lens backing for high contrast
-			var bg := MeshInstance3D.new()
-			bg.mesh = _shared_backing_mesh
-			bg.material_override = backing_mat
-			bg.rotation_degrees = Vector3(90, 0, 0)
-			bg.position = Vector3(ox, 0.0, fz * 0.23)
-			bg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			_housing_root.add_child(bg)
+		# Dark circular recessed lens backing on front (-Z) face only
+		var bg := MeshInstance3D.new()
+		bg.mesh = _shared_backing_mesh
+		bg.material_override = backing_mat
+		bg.rotation_degrees = Vector3(90, 0, 0)
+		bg.position = Vector3(ox, 0.0, -0.23)
+		bg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_housing_root.add_child(bg)
 
 		if i == 2:
-			# Dedicated 3D Left-Turn Arrow (←) on front (-Z) and back (+Z) faces
+			# Dedicated 3D Left-Turn Arrow (←) on front (-Z) face only
 			var arr_f := MeshInstance3D.new()
 			arr_f.mesh = _shared_arrow_front
 			arr_f.material_override = left_mat
 			arr_f.position = Vector3(ox, 0.0, -0.27)
 			arr_f.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			_housing_root.add_child(arr_f)
-
-			var arr_b := MeshInstance3D.new()
-			arr_b.mesh = _shared_arrow_back
-			arr_b.material_override = left_mat
-			arr_b.position = Vector3(ox, 0.0, 0.27)
-			arr_b.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			_housing_root.add_child(arr_b)
 		else:
-			for side_z in [-1.0, 1.0]:
-				var fz: float = float(side_z)
-				var bulb := MeshInstance3D.new()
-				bulb.mesh = _shared_disc_mesh
-				bulb.material_override = mats[i]
-				bulb.rotation_degrees = Vector3(90, 0, 0)
-				bulb.position = Vector3(ox, 0.0, fz * 0.25)
-				bulb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-				_housing_root.add_child(bulb)
+			var bulb := MeshInstance3D.new()
+			bulb.mesh = _shared_disc_mesh
+			bulb.material_override = mats[i]
+			bulb.rotation_degrees = Vector3(90, 0, 0)
+			bulb.position = Vector3(ox, 0.0, -0.25)
+			bulb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_housing_root.add_child(bulb)
 
 func set_arm_reach(road_half: float) -> void:
 	if not _pole_built:
