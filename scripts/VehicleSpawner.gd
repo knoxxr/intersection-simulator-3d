@@ -304,7 +304,7 @@ func _build_signalized_path(approach_idx: int, lane_idx: int, turn_type: int) ->
 
 		var arc_len := 0.0
 		var prev := stop_pt
-		var steps := 16
+		var steps := 24
 		for s in range(1, steps + 1):
 			var t := float(s) / float(steps)
 			var omt := 1.0 - t
@@ -378,7 +378,6 @@ func _build_roundabout_path(approach_idx: int, lane_idx: int, turn_type: int) ->
 
 	var a_entry := atan2(entry_rim.z, entry_rim.x)
 	var a_exit := atan2(exit_rim.z, exit_rim.x)
-	# Counter-clockwise (decreasing angle in Godot XZ plane viewed from +Y)
 	var raw_ccw := wrapf(a_exit - a_entry, -TAU, 0.0)
 	if raw_ccw > -0.02:
 		raw_ccw -= TAU
@@ -387,10 +386,9 @@ func _build_roundabout_path(approach_idx: int, lane_idx: int, turn_type: int) ->
 	var prev := yield_pt
 
 	if turn_type == TrafficController.TurnType.RIGHT and absf(raw_ccw) < 0.30:
-		# Very wide road tight right turn: smooth Bezier directly along outer edge
 		var mid_a := a_entry + raw_ccw * 0.5
 		var ctrl := Vector3(cos(mid_a) * outer_r, 0.0, sin(mid_a) * outer_r)
-		var steps := 10
+		var steps := 14
 		for s in range(1, steps + 1):
 			var t := float(s) / float(steps)
 			var omt := 1.0 - t
@@ -399,24 +397,24 @@ func _build_roundabout_path(approach_idx: int, lane_idx: int, turn_type: int) ->
 			pts.append(p)
 			prev = p
 	else:
-		var shift := minf(0.11, absf(raw_ccw) * 0.18)
+		var shift := minf(0.14, absf(raw_ccw) * 0.22)
 		var a_start := a_entry - shift
 		var a_end := a_entry + raw_ccw + shift
 		var p_ring_start := Vector3(cos(a_start) * r_circ, 0.0, sin(a_start) * r_circ)
 		var p_ring_end := Vector3(cos(a_end) * r_circ, 0.0, sin(a_end) * r_circ)
 
 		# 1. Smooth entry curve: yield_pt -> entry_rim -> p_ring_start
-		for s in range(1, 5):
-			var t := float(s) / 4.0
+		for s in range(1, 7):
+			var t := float(s) / 6.0
 			var omt := 1.0 - t
 			var p := (omt * omt) * yield_pt + (2.0 * omt * t) * entry_rim + (t * t) * p_ring_start
 			arc_len += prev.distance_to(p)
 			pts.append(p)
 			prev = p
 
-		# 2. Exact CCW circular arc along r_circ
+		# 2. High-res CCW circular arc along r_circ
 		var sweep := a_end - a_start
-		var arc_steps := clampi(int(absf(sweep) * 14.0), 6, 36)
+		var arc_steps := clampi(int(absf(sweep) * 18.0), 8, 48)
 		for s in range(1, arc_steps + 1):
 			var t := float(s) / float(arc_steps)
 			var ang := a_start + sweep * t
@@ -426,8 +424,8 @@ func _build_roundabout_path(approach_idx: int, lane_idx: int, turn_type: int) ->
 			prev = p
 
 		# 3. Smooth exit curve: p_ring_end -> exit_rim -> exit_yield
-		for s in range(1, 5):
-			var t := float(s) / 4.0
+		for s in range(1, 7):
+			var t := float(s) / 6.0
 			var omt := 1.0 - t
 			var p := (omt * omt) * p_ring_end + (2.0 * omt * t) * exit_rim + (t * t) * exit_yield
 			arc_len += prev.distance_to(p)

@@ -26,24 +26,29 @@ func _ready() -> void:
 	_rebuild_world()
 	ui_ctrl.bind_simulation(self)
 
-func _physics_process(delta: float) -> void:
+func _process(delta: float) -> void:
 	if paused:
 		return
-	var dt := delta * sim_speed
-	elapsed_sim_time += dt
+	var total_dt := minf(delta, 0.05) * sim_speed
+	# Sub-step when running at high speed (2x/4x) so steering & IDM physics stay rock-solid
+	var steps := maxi(1, int(ceilf(total_dt / 0.025)))
+	var dt := total_dt / float(steps)
 
-	var dir_waits := spawner.get_waiting_counts_by_dir()
-	var emerg_app := spawner.get_active_emergency_approach()
-	traffic_ctrl.set_live_inputs(dir_waits, emerg_app)
-	road_builder.update_congestion(dir_waits)
+	for _s in range(steps):
+		elapsed_sim_time += dt
+		var dir_waits := spawner.get_waiting_counts_by_dir()
+		var emerg_app := spawner.get_active_emergency_approach()
+		traffic_ctrl.set_live_inputs(dir_waits, emerg_app)
+		if _s == steps - 1:
+			road_builder.update_congestion(dir_waits)
 
-	traffic_ctrl.step_simulation(dt)
-	spawner.step_simulation(dt, traffic_ctrl)
+		traffic_ctrl.step_simulation(dt)
+		spawner.step_simulation(dt, traffic_ctrl)
 
 	while not recent_pass_timestamps.is_empty() and (elapsed_sim_time - recent_pass_timestamps[0]) > 60.0:
 		recent_pass_timestamps.pop_front()
 
-	_sample_accum += dt
+	_sample_accum += total_dt
 	if _sample_accum >= 1.0:
 		_sample_accum = 0.0
 		var m := get_metrics()
