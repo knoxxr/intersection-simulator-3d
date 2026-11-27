@@ -5,9 +5,12 @@ var wait_history: PackedFloat32Array = PackedFloat32Array()
 var throughput_history: PackedFloat32Array = PackedFloat32Array()
 const MAX_POINTS: int = 48
 
+const COL_TP := Color(0.28, 0.86, 1.0, 0.96)
+const COL_WAIT := Color(1.0, 0.62, 0.16, 0.96)
+
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	custom_minimum_size = Vector2(240, 68)
+	custom_minimum_size = Vector2(240, 82)
 
 func push_sample(waiting_cnt: float, throughput_pm: float) -> void:
 	wait_history.append(waiting_cnt)
@@ -29,25 +32,25 @@ func _draw() -> void:
 	if w < 20.0 or h < 20.0:
 		return
 
-	# Subtle chart background
-	draw_rect(Rect2(0, 0, w, h), Color(0.04, 0.06, 0.09, 0.72), true)
-	draw_rect(Rect2(0, 0, w, h), Color(0.24, 0.32, 0.44, 0.55), false, 1.0)
+	# Chart panel background & border
+	draw_rect(Rect2(0, 0, w, h), Color(0.04, 0.06, 0.10, 0.78), true)
+	draw_rect(Rect2(0, 0, w, h), Color(0.24, 0.34, 0.46, 0.60), false, 1.0)
+
+	var pad_x := 6.0
+	var pad_top := 15.0
+	var pad_bot := 14.0
+	var plot_w := w - pad_x * 2.0
+	var plot_h := maxf(10.0, h - pad_top - pad_bot)
 
 	# Horizontal grid lines
-	for g in range(1, 4):
-		var gy := h * (float(g) / 4.0)
-		draw_line(Vector2(2, gy), Vector2(w - 2, gy), Color(0.25, 0.32, 0.42, 0.25), 1.0)
+	for g in range(0, 4):
+		var gy := pad_top + plot_h * (float(g) / 3.0)
+		draw_line(Vector2(pad_x, gy), Vector2(w - pad_x, gy), Color(0.26, 0.34, 0.44, 0.28), 1.0)
 
-	if wait_history.size() < 2:
-		return
+	var font := ThemeDB.fallback_font
+	var fsz := 10
 
-	var pad_x := 4.0
-	var pad_top := 8.0
-	var pad_bot := 6.0
-	var plot_w := w - pad_x * 2.0
-	var plot_h := h - pad_top - pad_bot
-
-	# Determine scales with sensible floors
+	# Compute dynamic Y scales
 	var max_wait := 10.0
 	for v in wait_history:
 		if v > max_wait:
@@ -56,6 +59,20 @@ func _draw() -> void:
 	for v in throughput_history:
 		if v > max_tp:
 			max_tp = v
+	max_wait = ceilf(max_wait / 5.0) * 5.0
+	max_tp = ceilf(max_tp / 10.0) * 10.0
+
+	# Top Y-axis scale labels (Left: Throughput max in Cyan, Right: Waiting max in Amber)
+	if font != null:
+		draw_string(font, Vector2(pad_x, 11.0), "▲ %.0f/m" % max_tp, HORIZONTAL_ALIGNMENT_LEFT, -1, fsz, COL_TP)
+		draw_string(font, Vector2(pad_x, 11.0), "▲ %.0f" % max_wait, HORIZONTAL_ALIGNMENT_RIGHT, plot_w, fsz, COL_WAIT)
+		# Bottom X-axis time labels
+		var axis_col := Color(0.62, 0.70, 0.80, 0.78)
+		draw_string(font, Vector2(pad_x, h - 3.0), "-48s", HORIZONTAL_ALIGNMENT_LEFT, -1, fsz, axis_col)
+		draw_string(font, Vector2(pad_x, h - 3.0), Lang.t("graph_now"), HORIZONTAL_ALIGNMENT_RIGHT, plot_w, fsz, axis_col)
+
+	if wait_history.size() < 2:
+		return
 
 	var n := wait_history.size()
 	var pts_tp := PackedVector2Array()
@@ -69,6 +86,8 @@ func _draw() -> void:
 		pts_tp.append(Vector2(x, y_tp))
 		pts_wait.append(Vector2(x, y_w))
 
-	# Draw throughput line (cyan) and waiting queue line (amber/orange)
-	draw_polyline(pts_tp, Color(0.28, 0.82, 0.98, 0.92), 2.0, true)
-	draw_polyline(pts_wait, Color(1.0, 0.62, 0.18, 0.95), 2.0, true)
+	# Draw lines and latest-point dot indicators
+	draw_polyline(pts_tp, COL_TP, 2.2, true)
+	draw_polyline(pts_wait, COL_WAIT, 2.2, true)
+	draw_circle(pts_tp[pts_tp.size() - 1], 3.2, COL_TP)
+	draw_circle(pts_wait[pts_wait.size() - 1], 3.2, COL_WAIT)

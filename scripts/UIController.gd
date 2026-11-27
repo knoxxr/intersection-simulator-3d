@@ -36,6 +36,8 @@ var metrics_graph: MetricsGraph
 var lbl_phase: Label
 var lbl_counts: Label
 var lbl_perf: Label
+var lbl_leg_tp: Label
+var lbl_leg_wait: Label
 
 # Reusable theme styles
 var _style_panel: StyleBoxFlat
@@ -232,6 +234,8 @@ func _clear_ui() -> void:
 	lbl_phase = null
 	lbl_counts = null
 	lbl_perf = null
+	lbl_leg_tp = null
+	lbl_leg_wait = null
 
 func _style_button(btn: Button, active: bool = false, min_h: int = 34, font_sz: int = 13, danger: bool = false) -> void:
 	btn.custom_minimum_size.y = min_h
@@ -543,10 +547,10 @@ func _build_desktop_ui() -> void:
 	var hud := PanelContainer.new()
 	hud.anchor_left = 1.0
 	hud.anchor_right = 1.0
-	hud.offset_left = -330
+	hud.offset_left = -336
 	hud.offset_right = -14
 	hud.offset_top = 12
-	hud.offset_bottom = 228
+	hud.offset_bottom = 250
 	hud.mouse_filter = Control.MOUSE_FILTER_STOP
 	hud.add_theme_stylebox_override("panel", _style_panel)
 	add_child(hud)
@@ -600,15 +604,42 @@ func _build_desktop_ui() -> void:
 	hint.add_child(hint_lbl)
 
 func _add_graph_block(parent: VBoxContainer) -> void:
-	var leg := Label.new()
-	leg.text = Lang.t("graph_legend")
-	leg.add_theme_font_size_override("font_size", 11)
-	leg.add_theme_color_override("font_color", Color(0.74, 0.82, 0.90))
-	parent.add_child(leg)
+	var leg_row := HBoxContainer.new()
+	leg_row.add_theme_constant_override("separation", 6)
+	parent.add_child(leg_row)
+
+	# Cyan swatch + Throughput/m legend
+	var sw_tp := ColorRect.new()
+	sw_tp.color = MetricsGraph.COL_TP
+	sw_tp.custom_minimum_size = Vector2(10, 10)
+	sw_tp.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	leg_row.add_child(sw_tp)
+
+	lbl_leg_tp = Label.new()
+	lbl_leg_tp.text = "%s: 0" % Lang.t("graph_tp")
+	lbl_leg_tp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lbl_leg_tp.add_theme_font_size_override("font_size", 11)
+	lbl_leg_tp.add_theme_color_override("font_color", MetricsGraph.COL_TP)
+	leg_row.add_child(lbl_leg_tp)
+
+	# Amber swatch + Waiting Cars legend
+	var sw_w := ColorRect.new()
+	sw_w.color = MetricsGraph.COL_WAIT
+	sw_w.custom_minimum_size = Vector2(10, 10)
+	sw_w.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	leg_row.add_child(sw_w)
+
+	lbl_leg_wait = Label.new()
+	lbl_leg_wait.text = "%s: 0" % Lang.t("graph_wait")
+	lbl_leg_wait.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lbl_leg_wait.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	lbl_leg_wait.add_theme_font_size_override("font_size", 11)
+	lbl_leg_wait.add_theme_color_override("font_color", MetricsGraph.COL_WAIT)
+	leg_row.add_child(lbl_leg_wait)
 
 	metrics_graph = MetricsGraph.new()
 	metrics_graph.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	metrics_graph.custom_minimum_size = Vector2(240, 68)
+	metrics_graph.custom_minimum_size = Vector2(240, 82)
 	parent.add_child(metrics_graph)
 
 func _on_toggle_desktop_panel() -> void:
@@ -1102,6 +1133,11 @@ func _refresh_metrics() -> void:
 
 	var is_em: bool = m["emergency"]
 	lbl_phase.add_theme_color_override("font_color", Color(1.0, 0.42, 0.36) if is_em else Color(0.55, 0.88, 1.0))
+
+	if is_instance_valid(lbl_leg_tp):
+		lbl_leg_tp.text = "%s: %.0f" % [Lang.t("graph_tp"), m["throughput"]]
+	if is_instance_valid(lbl_leg_wait):
+		lbl_leg_wait.text = "%s: %d" % [Lang.t("graph_wait"), m["waiting"]]
 
 	if _is_mobile:
 		if lbl_counts:

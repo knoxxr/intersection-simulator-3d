@@ -109,7 +109,9 @@ const STRINGS: Dictionary = {
 		"hud_counts_pc": "Active: %d | Waiting: %d",
 		"hud_perf_pc": "Passed: %d | %.0f/min | Avg Wait %.1fs",
 		"hud_mobile_stats": "Active %d | Wait %d | Pass %d (%.0f/m) | Avg %.1fs",
-		"graph_legend": "Trend: Cyan (Veh/min) · Amber (Waiting)",
+		"graph_tp": "Throughput/m",
+		"graph_wait": "Waiting Cars",
+		"graph_now": "Now",
 
 		# Signal Phase Labels
 		"axis_ns": "N-S",
@@ -241,7 +243,9 @@ const STRINGS: Dictionary = {
 		"hud_counts_pc": "주행 중: %d대 | 정차 대기: %d대",
 		"hud_perf_pc": "통과: %d대 | %.0f대/분 | 평균대기 %.1f초",
 		"hud_mobile_stats": "주행 %d | 대기 %d | 통과 %d (%.0f/분) | 평균 %.1f초",
-		"graph_legend": "추이: 하늘(처리량/분) · 주황(대기차량)",
+		"graph_tp": "분당 처리량",
+		"graph_wait": "대기 차량",
+		"graph_now": "현재",
 
 		# Signal Phase Labels
 		"axis_ns": "남북",
