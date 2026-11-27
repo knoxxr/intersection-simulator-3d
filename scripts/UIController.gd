@@ -727,12 +727,23 @@ func _populate_scenario_controls(parent: VBoxContainer, touch: bool) -> void:
 	p_over.pressed.connect(func(): _apply_preset_and_sync("overpass"))
 	row4.add_child(p_over)
 
+	var p_tri := Button.new()
+	p_tri.text = Lang.t("preset_tri_level")
+	p_tri.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(p_tri, sim.intersection_type == RoadBuilder.IntersectionType.TRI_LEVEL, btn_h, fsz)
+	p_tri.pressed.connect(func(): _apply_preset_and_sync("tri_level"))
+	row4.add_child(p_tri)
+
+	var row5 := HBoxContainer.new()
+	row5.add_theme_constant_override("separation", 5)
+	parent.add_child(row5)
+
 	var p_mega := Button.new()
 	p_mega.text = Lang.t("preset_mega10")
 	p_mega.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_button(p_mega, false, btn_h, fsz)
 	p_mega.pressed.connect(func(): _apply_preset_and_sync("mega10"))
-	row4.add_child(p_mega)
+	row5.add_child(p_mega)
 
 func _populate_sim_camera_controls(parent: VBoxContainer, touch: bool) -> void:
 	var btn_h := 42 if touch else 30
@@ -939,6 +950,16 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 	)
 	type_row2.add_child(btn_ovr)
 
+	var btn_tri := Button.new()
+	btn_tri.text = Lang.t("type_tri_level")
+	btn_tri.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(btn_tri, itype == RoadBuilder.IntersectionType.TRI_LEVEL, btn_h, fsz)
+	btn_tri.pressed.connect(func():
+		sim.set_intersection_type(RoadBuilder.IntersectionType.TRI_LEVEL)
+		_sync_scale_and_layout(true)
+	)
+	parent.add_child(btn_tri)
+
 	# 1..10 Lanes per Direction Sliders (N-S & E-W independently)
 	ns_lane_btns.clear()
 	ew_lane_btns.clear()
@@ -1065,6 +1086,8 @@ func _populate_signal_controls(parent: VBoxContainer, touch: bool) -> void:
 			note.text = Lang.t("sig_disabled_rotary")
 		elif sim.intersection_type == RoadBuilder.IntersectionType.OVERPASS:
 			note.text = Lang.t("sig_disabled_overpass")
+		elif sim.intersection_type == RoadBuilder.IntersectionType.TRI_LEVEL:
+			note.text = Lang.t("sig_disabled_tri_level")
 		else:
 			note.text = Lang.t("sig_disabled_underpass")
 		note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

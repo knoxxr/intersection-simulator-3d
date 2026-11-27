@@ -478,8 +478,8 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, nearby_vehicles
 		if other == self or other.finished:
 			continue
 		var other_v: SimVehicle = other
-		# Separate underground tunnel traffic from surface overpass traffic cleanly
-		if is_underpass != other_v.is_underpass and absf(other_v.position.y - position.y) > 1.8:
+		# Separate elevated overpass (+6m), surface (0m), and underground tunnel (-5.4m) traffic cleanly
+		if absf(other_v.position.y - position.y) > 1.8:
 			continue
 		var rel: Vector3 = other_v.position - position
 		rel.y = 0.0

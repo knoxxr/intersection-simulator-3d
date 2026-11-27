@@ -63,22 +63,36 @@ func _rebuild_world() -> void:
 	var is_rotary := (intersection_type == RoadBuilder.IntersectionType.ROUNDABOUT)
 	var is_under := (intersection_type == RoadBuilder.IntersectionType.UNDERPASS)
 	var is_over := (intersection_type == RoadBuilder.IntersectionType.OVERPASS)
+	var is_tri := (intersection_type == RoadBuilder.IntersectionType.TRI_LEVEL)
 	spawner.is_roundabout = is_rotary
 	spawner.is_underpass = is_under
 	spawner.is_overpass = is_over
+	spawner.is_tri_level = is_tri
 	traffic_ctrl.set_roundabout_mode(is_rotary)
 	var grade_sep_only := false
+	var grade_label_key := "ph_underpass_free"
 	var light_ns_half := spawner.ns_lanes * RoadBuilder.LANE_WIDTH
 	var light_ew_half := spawner.ew_lanes * RoadBuilder.LANE_WIDTH
 	var ns_arm_override := -1.0
+	var ew_arm_override := -1.0
 	if is_under or is_over:
 		var lay := RoadBuilder.get_underpass_layout(spawner.ns_lanes, spawner.ew_lanes)
 		grade_sep_only = (int(lay["s_lanes"]) == 0)
+		grade_label_key = "ph_overpass_free" if is_over else "ph_underpass_free"
 		light_ns_half = float(lay["total_ns_half"])
 		if is_over and float(lay["surf_w"]) > 0.1:
-			# Keep N-S frontage signal arm strictly over the surface frontage lanes (outside elevated bridge deck)
 			ns_arm_override = float(lay["surf_w"]) * 0.7
-	traffic_ctrl.set_grade_separated_only(grade_sep_only, is_over)
+	elif is_tri:
+		var lay := RoadBuilder.get_tri_level_layout(spawner.ns_lanes, spawner.ew_lanes)
+		grade_sep_only = (int(lay["ns_s"]) == 0 or int(lay["ew_s"]) == 0)
+		grade_label_key = "ph_tri_level_free"
+		light_ns_half = float(lay["total_ns_half"])
+		light_ew_half = float(lay["total_ew_half"])
+		if float(lay["ns_surf_w"]) > 0.1:
+			ns_arm_override = float(lay["ns_surf_w"]) * 0.7
+		if float(lay["ew_surf_w"]) > 0.1:
+			ew_arm_override = float(lay["ew_surf_w"]) * 0.7
+	traffic_ctrl.set_grade_separated_only(grade_sep_only, grade_label_key)
 	road_builder.rebuild(
 		spawner.ns_lanes,
 		spawner.ew_lanes,
@@ -86,7 +100,7 @@ func _rebuild_world() -> void:
 		spawner.approach_enabled,
 		intersection_type
 	)
-	traffic_ctrl.reposition_lights(light_ns_half, light_ew_half, ns_arm_override)
+	traffic_ctrl.reposition_lights(light_ns_half, light_ew_half, ns_arm_override, ew_arm_override)
 
 func set_intersection_type(new_type: RoadBuilder.IntersectionType) -> void:
 	if intersection_type == new_type:
@@ -101,7 +115,7 @@ func set_ns_lanes(count: int) -> void:
 	if spawner.ns_lanes == c:
 		return
 	spawner.ns_lanes = c
-	if intersection_type == RoadBuilder.IntersectionType.UNDERPASS or intersection_type == RoadBuilder.IntersectionType.OVERPASS:
+	if intersection_type != RoadBuilder.IntersectionType.SIGNALIZED and intersection_type != RoadBuilder.IntersectionType.ROUNDABOUT:
 		spawner.clear_all_vehicles()
 	_rebuild_world()
 
@@ -110,7 +124,7 @@ func set_ew_lanes(count: int) -> void:
 	if spawner.ew_lanes == c:
 		return
 	spawner.ew_lanes = c
-	if intersection_type == RoadBuilder.IntersectionType.UNDERPASS or intersection_type == RoadBuilder.IntersectionType.OVERPASS:
+	if intersection_type != RoadBuilder.IntersectionType.SIGNALIZED and intersection_type != RoadBuilder.IntersectionType.ROUNDABOUT:
 		spawner.clear_all_vehicles()
 	_rebuild_world()
 
@@ -218,6 +232,17 @@ func apply_preset(preset_id: String) -> void:
 			spawner.right_turn_ratio = 0.18
 			traffic_ctrl.set_mode(TrafficController.SignalMode.SMART_ADAPTIVE)
 			orbit_camera.set_preset_iso()
+		"tri_level":
+			intersection_type = RoadBuilder.IntersectionType.TRI_LEVEL
+			spawner.ns_lanes = 4
+			spawner.ew_lanes = 4
+			spawner.approach_enabled = [true, true, true, true]
+			spawner.global_traffic_rate = 2.0
+			spawner.dir_traffic_mult = [1.5, 1.5, 1.5, 1.5]
+			spawner.left_turn_ratio = 0.18
+			spawner.right_turn_ratio = 0.18
+			traffic_ctrl.set_mode(TrafficController.SignalMode.SMART_ADAPTIVE)
+			orbit_camera.set_preset_iso()
 		"mega10":
 			intersection_type = RoadBuilder.IntersectionType.SIGNALIZED
 			spawner.ns_lanes = 10
@@ -230,7 +255,7 @@ func apply_preset(preset_id: String) -> void:
 			traffic_ctrl.set_mode(TrafficController.SignalMode.SMART_ADAPTIVE)
 			orbit_camera.set_preset_wide()
 
-	if prev_type != intersection_type or intersection_type == RoadBuilder.IntersectionType.UNDERPASS or intersection_type == RoadBuilder.IntersectionType.OVERPASS:
+	if prev_type != intersection_type or (intersection_type != RoadBuilder.IntersectionType.SIGNALIZED and intersection_type != RoadBuilder.IntersectionType.ROUNDABOUT):
 		spawner.clear_all_vehicles()
 	_rebuild_world()
 

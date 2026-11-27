@@ -6,12 +6,13 @@ const SPAWN_DIST: float = 110.0
 const MAX_VEHICLES: int = 180
 const GRID_CELL: float = 16.0
 
-# Live configurable simulation settings (1..10 lanes per direction, Signalized, Roundabout, Underpass, or Overpass)
+# Live configurable simulation settings (1..10 lanes per direction, Signalized, Roundabout, Underpass, Overpass, or 3-Level Stack)
 var ns_lanes: int = 2
 var ew_lanes: int = 2
 var is_roundabout: bool = false
 var is_underpass: bool = false
 var is_overpass: bool = false
+var is_tri_level: bool = false
 var lane_enabled: Array[bool] = [true, true, true, true, true, true, true, true, true, true]
 var approach_enabled: Array[bool] = [true, true, true, true] # N, S, E, W
 var global_traffic_rate: float = 1.0
@@ -194,7 +195,32 @@ func _try_spawn_on_approach(approach_idx: int) -> void:
 		turn_type = TrafficController.TurnType.RIGHT
 
 	var chosen_lane := _pick_lane_for_turn(open_lanes, l_cnt, turn_type)
-	if is_underpass or is_overpass:
+	if is_tri_level:
+		var lay := RoadBuilder.get_tri_level_layout(ns_lanes, ew_lanes)
+		var my_u: int = lay["ns_u"] if is_ns else lay["ew_u"]
+		var cross_s: int = lay["ew_s"] if is_ns else lay["ns_s"]
+		var open_exp: Array[int] = []
+		var open_surf: Array[int] = []
+		for ol in open_lanes:
+			if ol < my_u:
+				open_exp.append(ol)
+			else:
+				open_surf.append(ol)
+		if turn_type != TrafficController.TurnType.STRAIGHT:
+			if open_surf.is_empty() or cross_s == 0:
+				turn_type = TrafficController.TurnType.STRAIGHT
+				if not open_exp.is_empty():
+					chosen_lane = open_exp[randi() % open_exp.size()]
+				else:
+					chosen_lane = open_lanes[randi() % open_lanes.size()]
+			else:
+				chosen_lane = open_surf[0] if turn_type == TrafficController.TurnType.LEFT else open_surf[open_surf.size() - 1]
+		else:
+			if not open_exp.is_empty() and (open_surf.is_empty() or randf() < 0.82):
+				chosen_lane = open_exp[randi() % open_exp.size()]
+			elif not open_surf.is_empty():
+				chosen_lane = open_surf[randi() % open_surf.size()]
+	elif is_underpass or is_overpass:
 		var lay := RoadBuilder.get_underpass_layout(ns_lanes, ew_lanes)
 		var u_lanes: int = lay["u_lanes"]
 		var s_lanes: int = lay["s_lanes"]
@@ -278,11 +304,127 @@ func _pick_lane_for_turn(open_lanes: Array[int], total_lanes: int, turn_type: in
 		return open_lanes[randi() % open_lanes.size()]
 
 func _build_path(approach_idx: int, lane_idx: int, turn_type: int) -> Dictionary:
+	if is_tri_level:
+		return _build_tri_level_path(approach_idx, lane_idx, turn_type)
 	if is_underpass or is_overpass:
 		return _build_underpass_path(approach_idx, lane_idx, turn_type)
 	if is_roundabout:
 		return _build_roundabout_path(approach_idx, lane_idx, turn_type)
 	return _build_signalized_path(approach_idx, lane_idx, turn_type)
+
+func _build_tri_level_path(approach_idx: int, lane_idx: int, turn_type: int) -> Dictionary:
+	var forwards := [Vector3(0, 0, 1), Vector3(0, 0, -1), Vector3(-1, 0, 0), Vector3(1, 0, 0)]
+	var rights := [Vector3(-1, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 0, 1)]
+
+	var f: Vector3 = forwards[approach_idx]
+	var r: Vector3 = rights[approach_idx]
+	var is_ns := (approach_idx == 0 or approach_idx == 1)
+
+	var lay := RoadBuilder.get_tri_level_layout(ns_lanes, ew_lanes)
+	var ns_u: int = lay["ns_u"]
+	var ns_s: int = lay["ns_s"]
+	var ew_u: int = lay["ew_u"]
+	var ew_s: int = lay["ew_s"]
+	var total_ns_half: float = lay["total_ns_half"]
+	var total_ew_half: float = lay["total_ew_half"]
+	var my_u := ns_u if is_ns else ew_u
+
+	# Subcase A: Grade-Separated Express Lane (N-S Overpass +6.0m OR E-W Underpass -5.4m)
+	if lane_idx < my_u:
+		var d_u := RoadBuilder.get_tri_level_lane_offset(lane_idx, is_ns, lay)
+		var z_bot: float = lay["ns_z_bot"] if is_ns else lay["ew_x_bot"]
+		var z_top: float = lay["ns_z_top"] if is_ns else lay["ew_x_top"]
+		var elev_y: float = float(lay["height"]) if is_ns else float(lay["depth"])
+		var span_half: float = total_ew_half if is_ns else float(lay["ew_portal_x"])
+
+		var pts := PackedVector3Array()
+		pts.append(-f * SPAWN_DIST + r * d_u)
+		var ramp_steps := 18
+		for i in range(ramp_steps + 1):
+			var dist_a := lerpf(z_top, z_bot, float(i) / float(ramp_steps))
+			var y := RoadBuilder.get_underpass_y(dist_a, z_bot, z_top, elev_y)
+			var p := -f * dist_a + r * d_u
+			p.y = y
+			pts.append(p)
+		for i in range(ramp_steps + 1):
+			var dist_a := lerpf(z_bot, z_top, float(i) / float(ramp_steps))
+			var y := RoadBuilder.get_underpass_y(dist_a, z_bot, z_top, elev_y)
+			var p := f * dist_a + r * d_u
+			p.y = y
+			pts.append(p)
+		pts.append(f * SPAWN_DIST + r * d_u)
+
+		return {
+			"points": pts,
+			"stop_progress": SPAWN_DIST - span_half,
+			"exit_progress": SPAWN_DIST + span_half,
+			"ring_radius": 0.0,
+			"is_underpass": true
+		}
+
+	# Subcase B: Ground-Level Surface Frontage Road (y = 0.0)
+	var entry_stop: float = (total_ew_half + 3.2) if is_ns else (total_ns_half + 3.2)
+	var cross_stop: float = (total_ns_half + 3.2) if is_ns else (total_ew_half + 3.2)
+	var d_entry: float = RoadBuilder.get_tri_level_lane_offset(lane_idx, is_ns, lay)
+	var cross_u: int = ew_u if is_ns else ns_u
+	var cross_s: int = ew_s if is_ns else ns_s
+
+	var d_exit: float = d_entry
+	if turn_type != TrafficController.TurnType.STRAIGHT and cross_s > 0:
+		var ex_s := 0 if turn_type == TrafficController.TurnType.LEFT else maxi(0, cross_s - 1)
+		d_exit = RoadBuilder.get_tri_level_lane_offset(cross_u + ex_s, not is_ns, lay)
+
+	var pts_s := PackedVector3Array()
+	var spawn_pt := -f * SPAWN_DIST + r * d_entry
+	var stop_pt := -f * entry_stop + r * d_entry
+	var stop_prog := spawn_pt.distance_to(stop_pt)
+	var exit_prog := stop_prog + entry_stop * 2.0
+
+	if turn_type == TrafficController.TurnType.STRAIGHT or cross_s == 0:
+		var exit_box_pt := f * entry_stop + r * d_entry
+		var end_pt := f * SPAWN_DIST + r * d_entry
+		pts_s.append(spawn_pt)
+		pts_s.append(stop_pt)
+		pts_s.append(exit_box_pt)
+		pts_s.append(end_pt)
+		exit_prog = stop_prog + stop_pt.distance_to(exit_box_pt)
+	else:
+		var ctrl: Vector3
+		var exit_corner: Vector3
+		var end_pt: Vector3
+		if turn_type == TrafficController.TurnType.RIGHT:
+			ctrl = -f * d_exit + r * d_entry
+			exit_corner = -f * d_exit + r * cross_stop
+			end_pt = -f * d_exit + r * SPAWN_DIST
+		else: # LEFT
+			ctrl = f * d_exit + r * d_entry
+			exit_corner = f * d_exit - r * cross_stop
+			end_pt = f * d_exit - r * SPAWN_DIST
+
+		pts_s.append(spawn_pt)
+		pts_s.append(stop_pt)
+
+		var arc_len := 0.0
+		var prev := stop_pt
+		var steps := 24
+		for s in range(1, steps + 1):
+			var t := float(s) / float(steps)
+			var omt := 1.0 - t
+			var p := (omt * omt) * stop_pt + (2.0 * omt * t) * ctrl + (t * t) * exit_corner
+			arc_len += prev.distance_to(p)
+			pts_s.append(p)
+			prev = p
+
+		pts_s.append(end_pt)
+		exit_prog = stop_prog + arc_len
+
+	return {
+		"points": pts_s,
+		"stop_progress": stop_prog,
+		"exit_progress": exit_prog,
+		"ring_radius": 0.0,
+		"is_underpass": (ns_s == 0 or ew_s == 0)
+	}
 
 func _build_underpass_path(approach_idx: int, lane_idx: int, turn_type: int) -> Dictionary:
 	var forwards := [Vector3(0, 0, 1), Vector3(0, 0, -1), Vector3(-1, 0, 0), Vector3(1, 0, 0)]
