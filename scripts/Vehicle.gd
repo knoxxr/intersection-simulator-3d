@@ -17,8 +17,11 @@ static var _siren_blue_on: StandardMaterial3D
 static var _siren_blue_off: StandardMaterial3D
 static var _brake_off_mat: StandardMaterial3D
 static var _brake_on_mat: StandardMaterial3D
+static var _blinker_off_mat: StandardMaterial3D
+static var _blinker_on_mat: StandardMaterial3D
 static var _body_mat_cache: Dictionary = {}
 static var _baked_mesh_cache: Dictionary = {}
+static var _blinker_mesh_cache: Dictionary = {}
 static var _shared_brake_mesh: BoxMesh
 static var _shared_siren_mesh: BoxMesh
 
@@ -64,11 +67,52 @@ static func _ensure_shared_mats() -> void:
 	_brake_off_mat = _make_emissive_mat(Color(0.45, 0.05, 0.05), Color.BLACK, 0.0)
 	_brake_on_mat = _make_emissive_mat(Color(1.0, 0.10, 0.08), Color(1.0, 0.12, 0.08), 2.0)
 
+	_blinker_off_mat = _make_emissive_mat(Color(0.38, 0.20, 0.02), Color.BLACK, 0.0)
+	_blinker_on_mat = _make_emissive_mat(Color(1.0, 0.56, 0.02), Color(1.0, 0.44, 0.0), 4.0)
+
 	_shared_brake_mesh = BoxMesh.new()
-	_shared_brake_mesh.size = Vector3(1.50, 0.18, 0.08)
+	_shared_brake_mesh.size = Vector3(1.26, 0.18, 0.08)
 
 	_shared_siren_mesh = BoxMesh.new()
 	_shared_siren_mesh.size = Vector3(0.55, 0.24, 0.32)
+
+static func _get_vehicle_width(vkind: VehicleKind) -> float:
+	match vkind:
+		VehicleKind.TRUCK: return 2.15
+		VehicleKind.AMBULANCE: return 2.08
+		VehicleKind.SUV: return 1.96
+		_: return 1.85
+
+static func _get_blinker_mesh(vkind: VehicleKind, side: float, vlen: float) -> ArrayMesh:
+	var key := "%d_%d" % [int(vkind), int(signf(side))]
+	if _blinker_mesh_cache.has(key):
+		return _blinker_mesh_cache[key]
+
+	var w := _get_vehicle_width(vkind)
+	var half_w := w * 0.5
+	var half_l := vlen * 0.5
+	var y_lamp := 0.72 if (vkind == VehicleKind.TRUCK or vkind == VehicleKind.AMBULANCE) else 0.66
+	var y_side := 1.24 if vkind == VehicleKind.TRUCK else (1.18 if vkind == VehicleKind.AMBULANCE else 0.94)
+
+	var batch := MeshBatch.new()
+	# Front corner wrap-around turn signal (sits cleanly outside headlights, visible from front, side & overhead)
+	var front_x := side * (half_w - 0.01)
+	var front_z := -half_l + 0.04
+	batch.add_box(Vector3(front_x, y_lamp, front_z), Vector3(0.24, 0.24, 0.30), _blinker_on_mat)
+
+	# Rear corner wrap-around turn signal (sits cleanly outside brake light bar)
+	var rear_x := side * (half_w - 0.01)
+	var rear_z := half_l - 0.04
+	batch.add_box(Vector3(rear_x, y_lamp, rear_z), Vector3(0.24, 0.24, 0.30), _blinker_on_mat)
+
+	# Side mirror / fender repeater lamp (boosts readability from top-down isometric views)
+	var side_x := side * (half_w + 0.06)
+	var side_z := -half_l + (1.05 if vkind == VehicleKind.TRUCK else vlen * 0.30)
+	batch.add_box(Vector3(side_x, y_side, side_z), Vector3(0.16, 0.16, 0.36), _blinker_on_mat)
+
+	var mesh := batch.commit_multi_surface()
+	_blinker_mesh_cache[key] = mesh
+	return mesh
 
 static func _make_emissive_mat(albedo: Color, em: Color, energy: float) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
@@ -189,11 +233,14 @@ var has_passed_intersection: bool = false
 var finished: bool = false
 
 var _brake_mesh_node: MeshInstance3D
+var _blinker_left_mesh: MeshInstance3D
+var _blinker_right_mesh: MeshInstance3D
 var _siren_red_mesh: MeshInstance3D
 var _siren_blue_mesh: MeshInstance3D
 var _brake_lit: bool = false
 var _siren_phase: bool = false
 var _blink_accum: float = 0.0
+var _turn_blink_accum: float = 0.0
 
 func setup(
 	p_approach: int,
@@ -387,6 +434,24 @@ func _build_mesh(body_color: Color) -> void:
 	_brake_mesh_node.position = Vector3(0, 0.66, vehicle_length * 0.5 + 0.05)
 	_brake_mesh_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_body_pivot.add_child(_brake_mesh_node)
+
+	# Randomized blink phase so queued turning cars flash organically out-of-sync
+	_turn_blink_accum = randf_range(0.0, 0.72)
+	if not is_underpass:
+		var need_left := (turn_type == TrafficController.TurnType.LEFT)
+		var need_right := (turn_type == TrafficController.TurnType.RIGHT) or is_roundabout
+		if need_left:
+			_blinker_left_mesh = MeshInstance3D.new()
+			_blinker_left_mesh.mesh = _get_blinker_mesh(kind, -1.0, vehicle_length)
+			_blinker_left_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_blinker_left_mesh.visible = false
+			_body_pivot.add_child(_blinker_left_mesh)
+		if need_right:
+			_blinker_right_mesh = MeshInstance3D.new()
+			_blinker_right_mesh.mesh = _get_blinker_mesh(kind, 1.0, vehicle_length)
+			_blinker_right_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_blinker_right_mesh.visible = false
+			_body_pivot.add_child(_blinker_right_mesh)
 
 	if is_emergency:
 		_siren_red_mesh = MeshInstance3D.new()
@@ -662,10 +727,53 @@ func _has_oncoming_straight(in_box_vehicles: Array) -> bool:
 				return true
 	return false
 
+func _get_active_blinker_side() -> int:
+	if is_underpass:
+		return 0
+	if is_roundabout:
+		if turn_type == TrafficController.TurnType.RIGHT:
+			if progress >= stop_progress - 26.0 and progress <= exit_box_progress + 3.0:
+				return 1
+		elif turn_type == TrafficController.TurnType.STRAIGHT:
+			# Signal right when preparing to exit the roundabout
+			if progress >= exit_box_progress - 18.0 and progress <= exit_box_progress + 3.0:
+				return 1
+		elif turn_type == TrafficController.TurnType.LEFT:
+			# Signal left entering/circulating, then switch to right blinker when exiting
+			if progress >= exit_box_progress - 16.0 and progress <= exit_box_progress + 3.0:
+				return 1
+			elif progress >= stop_progress - 26.0 and progress < exit_box_progress - 16.0:
+				return -1
+		return 0
+
+	# Standard / frontage intersection: blink approaching stop line through turn completion
+	if turn_type == TrafficController.TurnType.LEFT:
+		if progress >= stop_progress - 36.0 and progress <= exit_box_progress + 2.0:
+			return -1
+	elif turn_type == TrafficController.TurnType.RIGHT:
+		if progress >= stop_progress - 30.0 and progress <= exit_box_progress + 2.0:
+			return 1
+	return 0
+
 func _update_lights(delta: float, braking: bool) -> void:
 	if braking != _brake_lit and _brake_mesh_node != null:
 		_brake_lit = braking
 		_brake_mesh_node.material_override = _brake_on_mat if braking else _brake_off_mat
+
+	if _blinker_left_mesh != null or _blinker_right_mesh != null:
+		var side := _get_active_blinker_side()
+		var flash_on := false
+		if side != 0:
+			_turn_blink_accum += delta
+			flash_on = fmod(_turn_blink_accum, 0.72) < 0.36
+		if _blinker_left_mesh != null:
+			var want_l := (side == -1 and flash_on)
+			if _blinker_left_mesh.visible != want_l:
+				_blinker_left_mesh.visible = want_l
+		if _blinker_right_mesh != null:
+			var want_r := (side == 1 and flash_on)
+			if _blinker_right_mesh.visible != want_r:
+				_blinker_right_mesh.visible = want_r
 
 	if is_emergency and _siren_red_mesh != null and _siren_blue_mesh != null:
 		_blink_accum += delta
