@@ -360,5 +360,5 @@ func _update_light_visuals() -> void:
 		elif left_asp == Aspect.YELLOW:
 			main_col = TrafficLight.SignalColor.YELLOW
 
-		var left_on := (_emergency_approach < 0 and mode == SignalMode.FOUR_PHASE and left_asp == Aspect.GREEN)
+		var left_on := (_emergency_approach < 0 and left_asp == Aspect.GREEN)
 		lights[i].set_display(main_col, left_on)
