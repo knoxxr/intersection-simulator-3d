@@ -59,6 +59,8 @@ var _style_btn_active: StyleBoxFlat
 var _style_btn_danger: StyleBoxFlat
 var _style_slider_bg: StyleBoxFlat
 var _style_slider_fill: StyleBoxFlat
+var _icon_pause: ImageTexture
+var _icon_play: ImageTexture
 
 func bind_simulation(main_sim: IntersectionMain) -> void:
 	sim = main_sim
@@ -110,6 +112,41 @@ func _init_styles() -> void:
 	_style_slider_fill.set_corner_radius_all(4)
 	_style_slider_fill.content_margin_top = 4
 	_style_slider_fill.content_margin_bottom = 4
+
+	_icon_pause = _create_pause_icon()
+	_icon_play = _create_play_icon()
+
+func _create_pause_icon() -> ImageTexture:
+	var s := 18
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var col := Color(0.95, 0.97, 1.0, 1.0)
+	for y in range(3, 15):
+		for x in range(4, 8):
+			img.set_pixel(x, y, col)
+		for x in range(10, 14):
+			img.set_pixel(x, y, col)
+	return ImageTexture.create_from_image(img)
+
+func _create_play_icon() -> ImageTexture:
+	var s := 18
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var col := Color(0.95, 0.97, 1.0, 1.0)
+	var x0 := 4.5
+	var x1 := 14.5
+	var cy := 8.5
+	var half_h := 5.5
+	for y in range(s):
+		var dy := absf(float(y) - cy)
+		if dy <= half_h + 0.5:
+			var max_x := lerpf(x1, x0, clampf(dy / half_h, 0.0, 1.0))
+			for x in range(int(floor(x0)), s):
+				var fx := float(x)
+				if fx >= x0 and fx <= max_x:
+					var edge_a := clampf(max_x - fx + 0.5, 0.0, 1.0)
+					img.set_pixel(x, y, Color(col.r, col.g, col.b, edge_a))
+	return ImageTexture.create_from_image(img)
 
 func _make_box(bg: Color, border: Color, radius: int, pad_x: int, pad_y: int) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
@@ -314,7 +351,9 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	row1.add_child(lang_btn)
 
 	pause_btn = Button.new()
-	pause_btn.text = "▶" if sim.paused else "⏸"
+	pause_btn.text = ""
+	pause_btn.icon = _icon_play if sim.paused else _icon_pause
+	pause_btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	pause_btn.custom_minimum_size = Vector2(38, 34)
 	_style_button(pause_btn, sim.paused, 34, 15)
 	pause_btn.pressed.connect(_on_toggle_pause)
@@ -342,18 +381,11 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	floating_controls.anchor_bottom = 1.0
 	floating_controls.offset_left = -58
 	floating_controls.offset_right = -10
-	floating_controls.offset_top = -274
+	floating_controls.offset_top = -220
 	floating_controls.offset_bottom = -16
 	floating_controls.add_theme_constant_override("separation", 8)
 	floating_controls.visible = not _drawer_open
 	add_child(floating_controls)
-
-	var amb_quick := Button.new()
-	amb_quick.text = Lang.t("quick_amb")
-	amb_quick.custom_minimum_size = Vector2(46, 44)
-	_style_button(amb_quick, false, 44, 12, true)
-	amb_quick.pressed.connect(func(): sim.dispatch_ambulance())
-	floating_controls.add_child(amb_quick)
 
 	var zoom_in_btn := Button.new()
 	zoom_in_btn.text = "+"
@@ -1431,7 +1463,8 @@ func _on_toggle_pause() -> void:
 	sim.paused = not sim.paused
 	if pause_btn:
 		if _is_mobile:
-			pause_btn.text = "▶" if sim.paused else "⏸"
+			pause_btn.text = ""
+			pause_btn.icon = _icon_play if sim.paused else _icon_pause
 			_style_button(pause_btn, sim.paused, 34, 15)
 		else:
 			pause_btn.text = Lang.t("resume") if sim.paused else Lang.t("pause")
