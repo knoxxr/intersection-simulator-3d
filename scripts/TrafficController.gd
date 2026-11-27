@@ -31,6 +31,7 @@ var _smart_ns_wait: int = 0
 var _smart_ew_wait: int = 0
 var _emergency_approach: int = -1 # -1 = none, 0..3 = approaching ambulance
 var is_roundabout: bool = false
+var is_grade_separated_only: bool = false
 
 var lights: Array[TrafficLight] = []
 
@@ -52,7 +53,11 @@ func _create_lights() -> void:
 
 func set_roundabout_mode(enabled: bool) -> void:
 	is_roundabout = enabled
-	visible = not enabled
+	visible = not (is_roundabout or is_grade_separated_only)
+
+func set_grade_separated_only(enabled: bool) -> void:
+	is_grade_separated_only = enabled
+	visible = not (is_roundabout or is_grade_separated_only)
 
 func reposition_lights(ns_half: float, ew_half: float) -> void:
 	if lights.size() < 4:
@@ -280,6 +285,8 @@ func get_phase_label() -> String:
 		if _emergency_approach >= 0:
 			return Lang.t("ph_roundabout_ems")
 		return Lang.t("ph_roundabout")
+	if is_grade_separated_only:
+		return Lang.t("ph_underpass_free")
 
 	if _emergency_approach >= 0:
 		var dir_str := Lang.t("axis_ns") if (_emergency_approach == 0 or _emergency_approach == 1) else Lang.t("axis_ew")
@@ -323,7 +330,7 @@ func get_phase_label() -> String:
 	return "-"
 
 func get_time_remaining() -> float:
-	if is_roundabout or _emergency_approach >= 0 or mode == SignalMode.ALL_RED or mode == SignalMode.FLASHING_YELLOW:
+	if is_roundabout or is_grade_separated_only or _emergency_approach >= 0 or mode == SignalMode.ALL_RED or mode == SignalMode.FLASHING_YELLOW:
 		return 0.0
 	return max(0.0, phase_timer)
 

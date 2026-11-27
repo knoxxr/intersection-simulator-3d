@@ -36,8 +36,9 @@ const STRINGS: Dictionary = {
 
 		# Intersection Types
 		"type_lbl": "Type:",
-		"type_signal": "4-Way Signal",
-		"type_roundabout": "Roundabout",
+		"type_signal": "Signal",
+		"type_roundabout": "Rotary",
+		"type_underpass": "Underpass",
 
 		# Scenarios & Ambulance
 		"btn_ambulance": "🚑 Dispatch Ambulance (Preempt)",
@@ -46,6 +47,7 @@ const STRINGS: Dictionary = {
 		"preset_left": "Heavy Left",
 		"preset_const": "Lane Closure",
 		"preset_roundabout": "Roundabout",
+		"preset_underpass": "Underpass",
 		"preset_mega10": "10-Lane Mega",
 
 		# Simulation & Camera & Lighting
@@ -90,6 +92,7 @@ const STRINGS: Dictionary = {
 
 		# Signals
 		"sig_disabled_rotary": "Roundabout active (unsignalized yield-on-entry)",
+		"sig_disabled_underpass": "Grade-separated underpass (1-lane free-flow, no signals)",
 		"mode_2p": "2-Phase (N-S / E-W)",
 		"mode_4p": "4-Phase (Protected Left)",
 		"mode_ai": "Smart Adaptive (AI Queue)",
@@ -118,6 +121,7 @@ const STRINGS: Dictionary = {
 		"axis_ew": "E-W",
 		"ph_roundabout": "Roundabout (Yield on Entry)",
 		"ph_roundabout_ems": "🚑 Roundabout — EMS Priority",
+		"ph_underpass_free": "Underpass (Free-Flow Grade Separated)",
 		"ph_emerg": "🚑 Emergency Preempt (%s)",
 		"ph_all_red": "All Red (Emergency Stop)",
 		"ph_flash": "Flashing Yellow (Yield)",
@@ -170,8 +174,9 @@ const STRINGS: Dictionary = {
 
 		# Intersection Types
 		"type_lbl": "형태:",
-		"type_signal": "신호 교차로",
-		"type_roundabout": "로터리 (회전)",
+		"type_signal": "신호등",
+		"type_roundabout": "로터리",
+		"type_underpass": "지하차도",
 
 		# Scenarios & Ambulance
 		"btn_ambulance": "🚑 구급차 긴급 출동 (우선신호)",
@@ -180,6 +185,7 @@ const STRINGS: Dictionary = {
 		"preset_left": "좌회전 정체",
 		"preset_const": "1차선 공사",
 		"preset_roundabout": "로터리 회전",
+		"preset_underpass": "지하차도",
 		"preset_mega10": "10차선 대로",
 
 		# Simulation & Camera & Lighting
@@ -224,6 +230,7 @@ const STRINGS: Dictionary = {
 
 		# Signals
 		"sig_disabled_rotary": "로터리 모드 활성화 중 (무신호 회전 우선 양보)",
+		"sig_disabled_underpass": "1차선 입체교차 지하차도 (무신호 연속 주행)",
 		"mode_2p": "2현시 (남북/동서 교대)",
 		"mode_4p": "4현시 (좌회전 보호 신호)",
 		"mode_ai": "스마트 감응 (AI 대기열 자동 제어)",
@@ -252,6 +259,7 @@ const STRINGS: Dictionary = {
 		"axis_ew": "동서",
 		"ph_roundabout": "로터리 회전교차로 (회전차량 우선)",
 		"ph_roundabout_ems": "🚑 로터리 — 구급차 통과 중",
+		"ph_underpass_free": "지하차도 입체교차 (무신호 통과)",
 		"ph_emerg": "🚑 긴급 우선신호 (%s 통과)",
 		"ph_all_red": "전체 적색 (긴급 정지)",
 		"ph_flash": "황색 점멸 (주의 서행)",

@@ -6,10 +6,11 @@ const SPAWN_DIST: float = 110.0
 const MAX_VEHICLES: int = 180
 const GRID_CELL: float = 16.0
 
-# Live configurable simulation settings (1..10 lanes per direction, Signalized or Roundabout)
+# Live configurable simulation settings (1..10 lanes per direction, Signalized, Roundabout, or Underpass)
 var ns_lanes: int = 2
 var ew_lanes: int = 2
 var is_roundabout: bool = false
+var is_underpass: bool = false
 var lane_enabled: Array[bool] = [true, true, true, true, true, true, true, true, true, true]
 var approach_enabled: Array[bool] = [true, true, true, true] # N, S, E, W
 var global_traffic_rate: float = 1.0
@@ -55,7 +56,7 @@ func get_active_emergency_approach() -> int:
 	var best_app := -1
 	var best_dist := 9999.0
 	for v in active_vehicles:
-		if is_instance_valid(v) and v.is_emergency and not v.has_passed_intersection:
+		if is_instance_valid(v) and v.is_emergency and not v.is_underpass and not v.has_passed_intersection:
 			var d := v.stop_progress - v.progress
 			if d < best_dist:
 				best_dist = d
@@ -106,7 +107,8 @@ func spawn_ambulance(preferred_approach: int = -1) -> bool:
 			SimVehicle.VehicleKind.AMBULANCE,
 			Color.WHITE,
 			is_roundabout,
-			path_data["ring_radius"]
+			path_data["ring_radius"],
+			bool(path_data.get("is_underpass", false))
 		)
 		active_vehicles.append(veh)
 		return true
@@ -191,6 +193,34 @@ func _try_spawn_on_approach(approach_idx: int) -> void:
 		turn_type = TrafficController.TurnType.RIGHT
 
 	var chosen_lane := _pick_lane_for_turn(open_lanes, l_cnt, turn_type)
+	if is_underpass:
+		var lay := RoadBuilder.get_underpass_layout(ns_lanes, ew_lanes)
+		var u_lanes: int = lay["u_lanes"]
+		var s_lanes: int = lay["s_lanes"]
+		if is_ns:
+			var open_under: Array[int] = []
+			var open_surf: Array[int] = []
+			for ol in open_lanes:
+				if ol < u_lanes:
+					open_under.append(ol)
+				else:
+					open_surf.append(ol)
+			if turn_type != TrafficController.TurnType.STRAIGHT:
+				if open_surf.is_empty():
+					turn_type = TrafficController.TurnType.STRAIGHT
+					chosen_lane = open_under[randi() % open_under.size()]
+				else:
+					chosen_lane = open_surf[0] if turn_type == TrafficController.TurnType.LEFT else open_surf[open_surf.size() - 1]
+			else:
+				if not open_under.is_empty() and (open_surf.is_empty() or randf() < 0.82):
+					chosen_lane = open_under[randi() % open_under.size()]
+				elif not open_surf.is_empty():
+					chosen_lane = open_surf[randi() % open_surf.size()]
+		else:
+			if s_lanes == 0:
+				turn_type = TrafficController.TurnType.STRAIGHT
+				chosen_lane = open_lanes[randi() % open_lanes.size()]
+
 	var path_data := _build_path(approach_idx, chosen_lane, turn_type)
 	var pts: PackedVector3Array = path_data["points"]
 	var spawn_pos: Vector3 = pts[0]
@@ -223,7 +253,8 @@ func _try_spawn_on_approach(approach_idx: int) -> void:
 		kind,
 		col,
 		is_roundabout,
-		path_data["ring_radius"]
+		path_data["ring_radius"],
+		bool(path_data.get("is_underpass", false))
 	)
 	active_vehicles.append(veh)
 
@@ -246,9 +277,135 @@ func _pick_lane_for_turn(open_lanes: Array[int], total_lanes: int, turn_type: in
 		return open_lanes[randi() % open_lanes.size()]
 
 func _build_path(approach_idx: int, lane_idx: int, turn_type: int) -> Dictionary:
+	if is_underpass:
+		return _build_underpass_path(approach_idx, lane_idx, turn_type)
 	if is_roundabout:
 		return _build_roundabout_path(approach_idx, lane_idx, turn_type)
 	return _build_signalized_path(approach_idx, lane_idx, turn_type)
+
+func _build_underpass_path(approach_idx: int, lane_idx: int, turn_type: int) -> Dictionary:
+	var forwards := [Vector3(0, 0, 1), Vector3(0, 0, -1), Vector3(-1, 0, 0), Vector3(1, 0, 0)]
+	var rights := [Vector3(-1, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 0, 1)]
+
+	var f: Vector3 = forwards[approach_idx]
+	var r: Vector3 = rights[approach_idx]
+	var is_ns := (approach_idx == 0 or approach_idx == 1)
+
+	var lay := RoadBuilder.get_underpass_layout(ns_lanes, ew_lanes)
+	var u_lanes: int = lay["u_lanes"]
+	var s_lanes: int = lay["s_lanes"]
+	var total_ns_half: float = lay["total_ns_half"]
+	var ew_half: float = lay["ew_half"]
+	var portal_z: float = lay["portal_z"]
+	var z_bot: float = lay["z_bot"]
+	var z_top: float = lay["z_top"]
+	var depth: float = lay["depth"]
+
+	# Subcase A: N-S Underground Express Lane (smooth 3D S-curve ramp down, flat tunnel under deck, ramp up)
+	if is_ns and lane_idx < u_lanes:
+		var d_u := RoadBuilder.get_underpass_lane_offset(lane_idx, lay)
+		var pts := PackedVector3Array()
+		var p_spawn := -f * SPAWN_DIST + r * d_u
+		pts.append(p_spawn)
+
+		# Entry ramp (-z_top .. -z_bot)
+		var ramp_steps := 18
+		for i in range(ramp_steps + 1):
+			var dist_z := lerpf(z_top, z_bot, float(i) / float(ramp_steps))
+			var y := RoadBuilder.get_underpass_y(dist_z, z_bot, z_top, depth)
+			var p := -f * dist_z + r * d_u
+			p.y = y
+			pts.append(p)
+
+		# Exit ramp (+z_bot .. +z_top)
+		for i in range(ramp_steps + 1):
+			var dist_z := lerpf(z_bot, z_top, float(i) / float(ramp_steps))
+			var y := RoadBuilder.get_underpass_y(dist_z, z_bot, z_top, depth)
+			var p := f * dist_z + r * d_u
+			p.y = y
+			pts.append(p)
+
+		pts.append(f * SPAWN_DIST + r * d_u)
+		var half_len := SPAWN_DIST
+		return {
+			"points": pts,
+			"stop_progress": half_len - portal_z,
+			"exit_progress": half_len + portal_z,
+			"ring_radius": 0.0,
+			"is_underpass": true
+		}
+
+	# Subcase B: Surface Frontage N-S OR E-W Overpass Deck (y = 0.0)
+	var entry_stop: float = (ew_half + 3.2) if is_ns else (total_ns_half + 3.2)
+	var cross_stop: float = (total_ns_half + 3.2) if is_ns else (ew_half + 3.2)
+	var d_entry: float = RoadBuilder.get_underpass_lane_offset(lane_idx, lay) if is_ns else ((float(lane_idx) + 0.5) * LANE_WIDTH)
+
+	var d_exit: float = d_entry
+	if turn_type != TrafficController.TurnType.STRAIGHT:
+		if is_ns:
+			var ex_ew := clampi(lane_idx - u_lanes, 0, ew_lanes - 1)
+			if turn_type == TrafficController.TurnType.LEFT:
+				ex_ew = clampi(ex_ew, 0, mini(1, ew_lanes - 1))
+			elif turn_type == TrafficController.TurnType.RIGHT:
+				ex_ew = ew_lanes - 1
+			d_exit = (float(ex_ew) + 0.5) * LANE_WIDTH
+		else:
+			# E-W turning onto N-S MUST exit onto surface frontage lanes (outside retaining wall!)
+			var ex_s := 0 if turn_type == TrafficController.TurnType.LEFT else maxi(0, s_lanes - 1)
+			d_exit = RoadBuilder.get_underpass_lane_offset(u_lanes + ex_s, lay)
+
+	var pts_s := PackedVector3Array()
+	var spawn_pt := -f * SPAWN_DIST + r * d_entry
+	var stop_pt := -f * entry_stop + r * d_entry
+	var stop_prog := spawn_pt.distance_to(stop_pt)
+	var exit_prog := stop_prog + entry_stop * 2.0
+
+	if turn_type == TrafficController.TurnType.STRAIGHT or (not is_ns and s_lanes == 0):
+		var exit_box_pt := f * entry_stop + r * d_entry
+		var end_pt := f * SPAWN_DIST + r * d_entry
+		pts_s.append(spawn_pt)
+		pts_s.append(stop_pt)
+		pts_s.append(exit_box_pt)
+		pts_s.append(end_pt)
+		exit_prog = stop_prog + stop_pt.distance_to(exit_box_pt)
+	else:
+		var ctrl: Vector3
+		var exit_corner: Vector3
+		var end_pt: Vector3
+		if turn_type == TrafficController.TurnType.RIGHT:
+			ctrl = -f * d_exit + r * d_entry
+			exit_corner = -f * d_exit + r * cross_stop
+			end_pt = -f * d_exit + r * SPAWN_DIST
+		else: # LEFT
+			ctrl = f * d_exit + r * d_entry
+			exit_corner = f * d_exit - r * cross_stop
+			end_pt = f * d_exit - r * SPAWN_DIST
+
+		pts_s.append(spawn_pt)
+		pts_s.append(stop_pt)
+
+		var arc_len := 0.0
+		var prev := stop_pt
+		var steps := 24
+		for s in range(1, steps + 1):
+			var t := float(s) / float(steps)
+			var omt := 1.0 - t
+			var p := (omt * omt) * stop_pt + (2.0 * omt * t) * ctrl + (t * t) * exit_corner
+			arc_len += prev.distance_to(p)
+			pts_s.append(p)
+			prev = p
+
+		pts_s.append(end_pt)
+		exit_prog = stop_prog + arc_len
+
+	# If s_lanes == 0 (1-lane pure grade-separated overpass), E-W also flows non-stop without signals
+	return {
+		"points": pts_s,
+		"stop_progress": stop_prog,
+		"exit_progress": exit_prog,
+		"ring_radius": 0.0,
+		"is_underpass": (s_lanes == 0)
+	}
 
 func _build_signalized_path(approach_idx: int, lane_idx: int, turn_type: int) -> Dictionary:
 	var forwards := [Vector3(0, 0, 1), Vector3(0, 0, -1), Vector3(-1, 0, 0), Vector3(1, 0, 0)]

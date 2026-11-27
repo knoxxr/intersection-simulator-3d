@@ -148,6 +148,7 @@ var turn_type: int = 0
 var kind: VehicleKind = VehicleKind.SEDAN
 var is_emergency: bool = false
 var is_roundabout: bool = false
+var is_underpass: bool = false
 var ring_radius: float = 0.0
 var yield_world_pos: Vector3 = Vector3.ZERO
 
@@ -201,7 +202,8 @@ func setup(
 	p_kind: VehicleKind,
 	p_color: Color,
 	p_is_roundabout: bool = false,
-	p_ring_radius: float = 0.0
+	p_ring_radius: float = 0.0,
+	p_is_underpass: bool = false
 ) -> void:
 	_ensure_shared_mats()
 	approach_idx = p_approach
@@ -213,6 +215,7 @@ func setup(
 	kind = p_kind
 	is_emergency = (kind == VehicleKind.AMBULANCE)
 	is_roundabout = p_is_roundabout
+	is_underpass = p_is_underpass
 	ring_radius = p_ring_radius
 
 	# Subtle natural driver variation
@@ -334,24 +337,31 @@ func _apply_visual_transform(dist: float, delta: float, snap: bool = false) -> v
 	forward = sm_fwd
 	var right_vec := Vector3(cos(_visual_yaw), 0.0, -sin(_visual_yaw))
 
-	# Apply subtle organic lateral lane offset
+	# Apply subtle organic lateral lane offset + exact 3D road elevation (for underpass ramps/tunnel)
 	var world_p := p_now + right_vec * lateral_offset
-	position = Vector3(world_p.x, 0.06, world_p.z)
+	position = Vector3(world_p.x, world_p.y + 0.06, world_p.z)
+
+	# Road grade slope pitch (tilts car naturally down entry ramp and up exit ramp)
+	var horiz_d := Vector2(p_ahead.x - p_now.x, p_ahead.z - p_now.z).length()
+	var slope_pitch := 0.0
+	if horiz_d > 0.15:
+		slope_pitch = clampf(atan2(p_ahead.y - p_now.y, horiz_d), -0.35, 0.35)
 
 	# Set base horizontal orientation
 	var z_axis := -sm_fwd
 	var x_axis := Vector3.UP.cross(z_axis).normalized()
 	basis = Basis(x_axis, Vector3.UP, z_axis)
 
-	# Realistic suspension pitch (nose dive on brake, squat on accel) & body roll on turns
+	# Realistic road slope + suspension pitch (nose dive on brake, squat on accel) & body roll on turns
 	if _body_pivot != null:
-		var target_pitch := clampf(current_accel * 0.0095, -0.048, 0.028)
+		var susp_pitch := clampf(current_accel * 0.0095, -0.048, 0.028)
 		var target_roll := clampf(yaw_rate * speed * 0.0038, -0.055, 0.055)
 		if kind == VehicleKind.TRUCK or kind == VehicleKind.SUV:
 			target_roll *= 1.25
-			target_pitch *= 1.15
+			susp_pitch *= 1.15
+		var target_pitch := slope_pitch + susp_pitch
 		if snap:
-			_visual_pitch = 0.0
+			_visual_pitch = slope_pitch
 			_visual_roll = 0.0
 		else:
 			var susp_k := minf(1.0, delta * 9.0)
@@ -424,9 +434,9 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, nearby_vehicles
 		stuck_timer = 0.0
 	var clearing_deadlock := (stuck_timer > 1.8)
 
-	# 1. Traffic signal OR Roundabout yield-on-entry check
+	# 1. Traffic signal OR Roundabout yield-on-entry check (grade-separated underpass express lanes never stop!)
 	var dist_to_stop := stop_progress - (progress + vehicle_length * 0.52)
-	if dist_to_stop > -0.8 and progress < stop_progress:
+	if not is_underpass and dist_to_stop > -0.8 and progress < stop_progress:
 		if is_roundabout:
 			if dist_to_stop < 15.0:
 				target_speed = min(target_speed, 9.5 if is_emergency else 7.6)
@@ -468,6 +478,9 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, nearby_vehicles
 		if other == self or other.finished:
 			continue
 		var other_v: SimVehicle = other
+		# Separate underground tunnel traffic from surface overpass traffic cleanly
+		if is_underpass != other_v.is_underpass and absf(other_v.position.y - position.y) > 1.8:
+			continue
 		var rel: Vector3 = other_v.position - position
 		rel.y = 0.0
 		var dist_sq := rel.length_squared()
@@ -617,6 +630,8 @@ func _has_conflicting_in_box(in_box_vehicles: Array) -> bool:
 		if other == self or other.finished:
 			continue
 		var other_v: SimVehicle = other
+		if other_v.is_underpass:
+			continue
 		if other_v.approach_idx == approach_idx:
 			continue
 		if other_v.progress >= other_v.stop_progress - 0.5:
@@ -629,6 +644,8 @@ func _has_oncoming_straight(in_box_vehicles: Array) -> bool:
 		if other == self or other.finished:
 			continue
 		var other_v: SimVehicle = other
+		if other_v.is_underpass:
+			continue
 		if other_v.approach_idx == opp and other_v.turn_type != TrafficController.TurnType.LEFT:
 			if other_v.speed > 1.5:
 				return true

@@ -5,7 +5,7 @@ const LANE_WIDTH: float = 3.5
 const ROAD_HALF_LEN: float = 115.0
 
 enum TimeOfDay { DAY, SUNSET, NIGHT }
-enum IntersectionType { SIGNALIZED, ROUNDABOUT }
+enum IntersectionType { SIGNALIZED, ROUNDABOUT, UNDERPASS }
 
 var dynamic_root: Node3D
 var env_built: bool = false
@@ -19,6 +19,9 @@ var grass_mat: StandardMaterial3D
 var asphalt_mat: StandardMaterial3D
 var intersection_mat: StandardMaterial3D
 var sidewalk_mat: StandardMaterial3D
+var concrete_wall_mat: StandardMaterial3D
+var portal_trim_mat: StandardMaterial3D
+var tunnel_light_mat: StandardMaterial3D
 var yellow_line_mat: StandardMaterial3D
 var white_line_mat: StandardMaterial3D
 var cone_mat: StandardMaterial3D
@@ -47,6 +50,46 @@ static func get_roundabout_radii(ns_lanes: int, ew_lanes: int) -> Dictionary:
 		"yield_dist": yield_dist
 	}
 
+static func get_underpass_layout(ns_lanes: int, ew_lanes: int) -> Dictionary:
+	var u_lanes := 1 if ns_lanes <= 1 else clampi(int((ns_lanes + 1) / 2), 1, ns_lanes - 1)
+	var s_lanes := ns_lanes - u_lanes
+	var under_half := float(u_lanes) * LANE_WIDTH + 0.40
+	var wall_w := 0.95
+	var surf_w := float(s_lanes) * LANE_WIDTH
+	var total_ns_half := under_half + wall_w + surf_w
+	var ew_half := float(ew_lanes) * LANE_WIDTH
+	var portal_z := ew_half + 4.8
+	var z_bot := portal_z + 2.5
+	var z_top := minf(ROAD_HALF_LEN - 14.0, z_bot + 44.0)
+	return {
+		"u_lanes": u_lanes,
+		"s_lanes": s_lanes,
+		"under_half": under_half,
+		"wall_w": wall_w,
+		"surf_w": surf_w,
+		"total_ns_half": total_ns_half,
+		"ew_half": ew_half,
+		"portal_z": portal_z,
+		"z_bot": z_bot,
+		"z_top": z_top,
+		"depth": -5.4
+	}
+
+static func get_underpass_y(abs_z: float, z_bot: float, z_top: float, depth: float = -5.4) -> float:
+	if abs_z <= z_bot:
+		return depth
+	if abs_z >= z_top:
+		return 0.0
+	var t := (abs_z - z_bot) / maxf(0.1, z_top - z_bot)
+	return depth * 0.5 * (1.0 + cos(PI * t))
+
+static func get_underpass_lane_offset(lane_idx: int, layout: Dictionary) -> float:
+	var u_lanes: int = layout["u_lanes"]
+	if lane_idx < u_lanes:
+		return (float(lane_idx) + 0.5) * LANE_WIDTH
+	var s_idx := lane_idx - u_lanes
+	return float(layout["under_half"]) + float(layout["wall_w"]) + (float(s_idx) + 0.5) * LANE_WIDTH
+
 func _ready() -> void:
 	_init_materials()
 	_setup_lighting_and_sky()
@@ -59,6 +102,8 @@ func _init_materials() -> void:
 	asphalt_mat = _make_mat(Color(0.18, 0.19, 0.21), 0.88)
 	intersection_mat = _make_mat(Color(0.15, 0.16, 0.18), 0.88)
 	sidewalk_mat = _make_mat(Color(0.66, 0.67, 0.69), 0.85)
+	concrete_wall_mat = _make_mat(Color(0.56, 0.58, 0.62), 0.86)
+	portal_trim_mat = _make_mat(Color(0.16, 0.18, 0.22), 0.52)
 	yellow_line_mat = _make_mat(Color(0.95, 0.78, 0.12), 0.5)
 	white_line_mat = _make_mat(Color(0.93, 0.94, 0.96), 0.5)
 	cone_mat = _make_mat(Color(1.0, 0.36, 0.05), 0.45)
@@ -74,6 +119,13 @@ func _init_materials() -> void:
 	lamp_bulb_mat.emission_enabled = true
 	lamp_bulb_mat.emission = Color(1.0, 0.88, 0.58)
 	lamp_bulb_mat.emission_energy_multiplier = 0.0
+
+	tunnel_light_mat = StandardMaterial3D.new()
+	tunnel_light_mat.albedo_color = Color(0.98, 0.95, 0.86)
+	tunnel_light_mat.roughness = 0.2
+	tunnel_light_mat.emission_enabled = true
+	tunnel_light_mat.emission = Color(1.0, 0.93, 0.76)
+	tunnel_light_mat.emission_energy_multiplier = 1.6
 
 	var b_colors := [
 		Color(0.62, 0.68, 0.75),
@@ -140,6 +192,7 @@ func set_time_of_day(mode: TimeOfDay) -> void:
 			env.ambient_light_color = Color(0.75, 0.80, 0.88)
 			env.ambient_light_energy = 0.60
 			lamp_bulb_mat.emission_energy_multiplier = 0.0
+			tunnel_light_mat.emission_energy_multiplier = 1.6
 		TimeOfDay.SUNSET:
 			sun_light.light_energy = 0.95
 			sun_light.light_color = Color(1.0, 0.62, 0.34)
@@ -148,6 +201,7 @@ func set_time_of_day(mode: TimeOfDay) -> void:
 			env.ambient_light_color = Color(0.72, 0.50, 0.45)
 			env.ambient_light_energy = 0.48
 			lamp_bulb_mat.emission_energy_multiplier = 1.4
+			tunnel_light_mat.emission_energy_multiplier = 2.4
 		TimeOfDay.NIGHT:
 			sun_light.light_energy = 0.28
 			sun_light.light_color = Color(0.42, 0.56, 0.88)
@@ -156,6 +210,7 @@ func set_time_of_day(mode: TimeOfDay) -> void:
 			env.ambient_light_color = Color(0.24, 0.30, 0.46)
 			env.ambient_light_energy = 0.42
 			lamp_bulb_mat.emission_energy_multiplier = 2.8
+			tunnel_light_mat.emission_energy_multiplier = 3.2
 
 func update_congestion(dir_wait_counts: Array[int]) -> void:
 	for i in range(min(congestion_bars.size(), dir_wait_counts.size())):
@@ -190,17 +245,331 @@ func rebuild(ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_e
 	var flat_batch := MeshBatch.new()
 	var solid_batch := MeshBatch.new()
 
-	# Ground base plane cleanly 0.25m below road surface
-	flat_batch.add_box(Vector3(0, -0.45, 0), Vector3(480, 0.4, 480), grass_mat)
-
-	if itype == IntersectionType.ROUNDABOUT:
-		_build_roundabout_geometry(flat_batch, solid_batch, ns_lanes, ew_lanes, lane_enabled, approach_enabled)
+	if itype == IntersectionType.UNDERPASS:
+		_build_underpass_geometry(flat_batch, solid_batch, ns_lanes, ew_lanes, lane_enabled, approach_enabled)
 	else:
-		_build_signalized_geometry(flat_batch, solid_batch, ns_lanes, ew_lanes, lane_enabled, approach_enabled)
+		# Ground base plane cleanly 0.25m below road surface
+		flat_batch.add_box(Vector3(0, -0.45, 0), Vector3(480, 0.4, 480), grass_mat)
+		if itype == IntersectionType.ROUNDABOUT:
+			_build_roundabout_geometry(flat_batch, solid_batch, ns_lanes, ew_lanes, lane_enabled, approach_enabled)
+		else:
+			_build_signalized_geometry(flat_batch, solid_batch, ns_lanes, ew_lanes, lane_enabled, approach_enabled)
 
-	# Commit entire world into ~14 batched MeshInstance3D draw calls (down from 1,500+!)
+	# Commit entire world into ~16-24 batched MeshInstance3D draw calls (down from 1,500+!)
 	flat_batch.commit_as_nodes(dynamic_root, false)
 	solid_batch.commit_as_nodes(dynamic_root, true)
+
+func _build_underpass_geometry(flat_batch: MeshBatch, solid_batch: MeshBatch, ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_enabled: Array[bool]) -> void:
+	var lay := get_underpass_layout(ns_lanes, ew_lanes)
+	var u_lanes: int = lay["u_lanes"]
+	var s_lanes: int = lay["s_lanes"]
+	var under_half: float = lay["under_half"]
+	var wall_w: float = lay["wall_w"]
+	var surf_w: float = lay["surf_w"]
+	var total_ns_half: float = lay["total_ns_half"]
+	var ew_half: float = lay["ew_half"]
+	var portal_z: float = lay["portal_z"]
+	var z_bot: float = lay["z_bot"]
+	var z_top: float = lay["z_top"]
+	var depth: float = lay["depth"]
+	var mark_y: float = 0.05
+
+	var stop_z: float = ew_half + 3.2
+	var stop_x: float = total_ns_half + 3.2
+	var wall_outer: float = under_half + wall_w
+
+	# 1. Split grass base plane around the sunken underpass trough so ground NEVER clips through the tunnel
+	var cut_x := wall_outer
+	var cut_z := z_top + 0.5
+	var side_w := 240.0 - cut_x
+	var end_d := 240.0 - cut_z
+	flat_batch.add_box(Vector3(-(cut_x + side_w * 0.5), -0.45, 0.0), Vector3(side_w, 0.4, 480.0), grass_mat)
+	flat_batch.add_box(Vector3(cut_x + side_w * 0.5, -0.45, 0.0), Vector3(side_w, 0.4, 480.0), grass_mat)
+	flat_batch.add_box(Vector3(0.0, -0.45, -(cut_z + end_d * 0.5)), Vector3(cut_x * 2.0, 0.4, end_d), grass_mat)
+	flat_batch.add_box(Vector3(0.0, -0.45, cut_z + end_d * 0.5), Vector3(cut_x * 2.0, 0.4, end_d), grass_mat)
+
+	# 2. Deep Flat Tunnel Floor (|z| <= z_bot at y = depth) + Tunnel Markings
+	flat_batch.add_box(Vector3(0.0, depth - 0.12, 0.0), Vector3(under_half * 2.0 + 0.4, 0.24, z_bot * 2.0), intersection_mat)
+	flat_batch.add_plane_xz(Vector3(-0.15, depth + mark_y, 0.0), Vector2(0.14, z_bot * 2.0), yellow_line_mat)
+	flat_batch.add_plane_xz(Vector3(0.15, depth + mark_y, 0.0), Vector2(0.14, z_bot * 2.0), yellow_line_mat)
+	for sx in [-1.0, 1.0]:
+		var fx: float = float(sx)
+		flat_batch.add_plane_xz(Vector3(fx * (under_half - 0.18), depth + mark_y, 0.0), Vector2(0.14, z_bot * 2.0), white_line_mat)
+		for l in range(1, u_lanes):
+			var lx := float(l) * LANE_WIDTH
+			var zp := -z_bot + 1.8
+			while zp < z_bot - 1.5:
+				flat_batch.add_plane_xz(Vector3(fx * lx, depth + mark_y, zp), Vector2(0.14, 2.6), white_line_mat)
+				zp += 5.6
+
+	# 3. Covered Tunnel Interior Walls, Support Piers, and Ceiling LED Strips (|z| <= portal_z)
+	var tunnel_wall_h := (-0.85) - (depth - 0.12)
+	var tunnel_wall_cy := (depth - 0.12) + tunnel_wall_h * 0.5
+	for sx in [-1.0, 1.0]:
+		var fx: float = float(sx)
+		flat_batch.add_box(Vector3(fx * (under_half + wall_w * 0.5), tunnel_wall_cy, 0.0), Vector3(wall_w, tunnel_wall_h, portal_z * 2.0), concrete_wall_mat)
+		# Tunnel ceiling warm LED strips
+		var led_x := fx * (under_half * 0.5)
+		var lz := -portal_z + 2.4
+		while lz <= portal_z - 2.0:
+			flat_batch.add_box(Vector3(led_x, -0.89, lz), Vector3(minf(1.8, under_half * 0.55), 0.08, 2.2), tunnel_light_mat)
+			lz += 5.4
+
+	# Central concrete structural piers inside tunnel dividing N/S bores
+	var pier_z := -portal_z + 3.5
+	while pier_z <= portal_z - 3.0:
+		solid_batch.add_box(Vector3(0.0, tunnel_wall_cy, pier_z), Vector3(0.46, tunnel_wall_h, 1.25), concrete_wall_mat)
+		pier_z += 7.0
+
+	# 4. Smooth S-Curve Ramps (North & South, |z| from z_bot to z_top) + Sloped Retaining Walls & Markings
+	var slices := 22
+	var taper_start := z_top - 5.0
+	for sz in [-1.0, 1.0]:
+		var fz: float = float(sz)
+		for i in range(slices):
+			var za := lerpf(z_bot, z_top, float(i) / float(slices))
+			var zb := lerpf(z_bot, z_top, float(i + 1) / float(slices))
+			var ya := get_underpass_y(za, z_bot, z_top, depth)
+			var yb := get_underpass_y(zb, z_bot, z_top, depth)
+			var z0 := fz * za
+			var z1 := fz * zb
+			var n_up := Vector3(0.0, zb - za, -(yb - ya) * fz).normalized()
+
+			# Sloped asphalt ramp roadbed
+			flat_batch.add_quad_normal(
+				Vector3(-under_half, ya, z0),
+				Vector3(under_half, ya, z0),
+				Vector3(under_half, yb, z1),
+				Vector3(-under_half, yb, z1),
+				n_up,
+				asphalt_mat
+			)
+
+			# Double yellow centerline along ramp slope
+			for side_s in [-1.0, 1.0]:
+				var xc: float = float(side_s) * 0.15
+				flat_batch.add_quad_normal(
+					Vector3(xc - 0.07, ya + mark_y, z0),
+					Vector3(xc + 0.07, ya + mark_y, z0),
+					Vector3(xc + 0.07, yb + mark_y, z1),
+					Vector3(xc - 0.07, yb + mark_y, z1),
+					n_up,
+					yellow_line_mat
+				)
+				# White ramp edge lines
+				var xe: float = float(side_s) * (under_half - 0.18)
+				flat_batch.add_quad_normal(
+					Vector3(xe - 0.07, ya + mark_y, z0),
+					Vector3(xe + 0.07, ya + mark_y, z0),
+					Vector3(xe + 0.07, yb + mark_y, z1),
+					Vector3(xe - 0.07, yb + mark_y, z1),
+					n_up,
+					white_line_mat
+				)
+				# Dashed white lane lines along ramp
+				if i % 2 == 0:
+					for l in range(1, u_lanes):
+						var xl: float = float(side_s) * float(l) * LANE_WIDTH
+						flat_batch.add_quad_normal(
+							Vector3(xl - 0.07, ya + mark_y, z0),
+							Vector3(xl + 0.07, ya + mark_y, z0),
+							Vector3(xl + 0.07, yb + mark_y, z1),
+							Vector3(xl - 0.07, yb + mark_y, z1),
+							n_up,
+							white_line_mat
+						)
+
+			# Retaining walls flanking the ramp (rising from sloped floor to tapered safety parapet)
+			var yt_a := 0.92 if za <= taper_start else lerpf(0.92, 0.18, clampf((za - taper_start) / 5.0, 0.0, 1.0))
+			var yt_b := 0.92 if zb <= taper_start else lerpf(0.92, 0.18, clampf((zb - taper_start) / 5.0, 0.0, 1.0))
+			for sx in [-1.0, 1.0]:
+				var fx: float = float(sx)
+				var xi := fx * under_half
+				var xo := fx * wall_outer
+				# Inner vertical retaining wall facing into trough
+				flat_batch.add_quad_normal(
+					Vector3(xi, ya - 0.08, z0),
+					Vector3(xi, yb - 0.08, z1),
+					Vector3(xi, yt_b, z1),
+					Vector3(xi, yt_a, z0),
+					Vector3(-fx, 0.0, 0.0),
+					concrete_wall_mat
+				)
+				# Outer vertical parapet face facing surface frontage road
+				flat_batch.add_quad_normal(
+					Vector3(xo, -0.04, z0),
+					Vector3(xo, -0.04, z1),
+					Vector3(xo, yt_b, z1),
+					Vector3(xo, yt_a, z0),
+					Vector3(fx, 0.0, 0.0),
+					concrete_wall_mat
+				)
+				# Top concrete parapet cap
+				flat_batch.add_quad_up(
+					Vector3(xi, yt_a, z0),
+					Vector3(xo, yt_a, z0),
+					Vector3(xo, yt_b, z1),
+					Vector3(xi, yt_b, z1),
+					sidewalk_mat
+				)
+
+		# Connect short deep flat retaining walls between portal_z and z_bot
+		var stub_len := z_bot - portal_z
+		if stub_len > 0.05:
+			var stub_cz := fz * (portal_z + stub_len * 0.5)
+			var stub_h := 0.92 - (depth - 0.12)
+			var stub_cy := (depth - 0.12) + stub_h * 0.5
+			for sx in [-1.0, 1.0]:
+				var fx: float = float(sx)
+				flat_batch.add_box(Vector3(fx * (under_half + wall_w * 0.5), stub_cy, stub_cz), Vector3(wall_w, stub_h, stub_len), concrete_wall_mat)
+
+		# Steel safety guardrail bar along retaining wall top (portal_z .. taper_start)
+		var rail_len := maxf(0.0, taper_start - portal_z)
+		if rail_len > 0.5:
+			var rail_cz := fz * (portal_z + rail_len * 0.5)
+			for sx in [-1.0, 1.0]:
+				var fx: float = float(sx)
+				solid_batch.add_box(Vector3(fx * (under_half + wall_w * 0.5), 1.08, rail_cz), Vector3(0.12, 0.08, rail_len), portal_trim_mat)
+
+		# Flat ground-level express approach beyond ramp top (z_top .. ROAD_HALF_LEN)
+		var app_len := maxf(1.0, ROAD_HALF_LEN - z_top)
+		var app_cz := fz * (z_top + app_len * 0.5)
+		flat_batch.add_box(Vector3(0.0, -0.10, app_cz), Vector3(under_half * 2.0, 0.20, app_len), asphalt_mat)
+		flat_batch.add_plane_xz(Vector3(-0.15, mark_y, app_cz), Vector2(0.14, app_len), yellow_line_mat)
+		flat_batch.add_plane_xz(Vector3(0.15, mark_y, app_cz), Vector2(0.14, app_len), yellow_line_mat)
+		for sx in [-1.0, 1.0]:
+			var fx: float = float(sx)
+			flat_batch.add_plane_xz(Vector3(fx * (under_half - 0.18), mark_y, app_cz), Vector2(0.14, app_len), white_line_mat)
+			# Low raised median curb separating express underpass lanes from frontage lanes beyond ramp
+			flat_batch.add_box(Vector3(fx * (under_half + wall_w * 0.5), 0.07, app_cz), Vector3(wall_w, 0.18, app_len), sidewalk_mat)
+			for l in range(1, u_lanes):
+				var lx := float(l) * LANE_WIDTH
+				var zp := z_top + 2.2
+				while zp < ROAD_HALF_LEN - 2.0:
+					flat_batch.add_plane_xz(Vector3(fx * lx, mark_y, fz * zp), Vector2(0.14, 2.8), white_line_mat)
+					zp += 6.0
+
+		# Express straight pavement arrows before ramp dive (incoming lanes only)
+		var in_x_sign := fz # North arm (fz=-1): incoming is -X; South arm (fz=+1): incoming is +X
+		var fwd_in := Vector3(0.0, 0.0, -fz)
+		var rt_in := Vector3(in_x_sign, 0.0, 0.0)
+		for l in range(u_lanes):
+			var ax := in_x_sign * (float(l) + 0.5) * LANE_WIDTH
+			_add_pavement_arrow(flat_batch, Vector3(ax, mark_y, fz * (z_top + 5.5)), fwd_in, rt_in, white_line_mat)
+
+	# 5. Overpass Bridge Deck & Tunnel Portals (|z| <= portal_z)
+	# Structural concrete bridge slab underneath the E-W deck
+	solid_batch.add_box(Vector3(0.0, -0.475, 0.0), Vector3(wall_outer * 2.0, 0.75, portal_z * 2.0), concrete_wall_mat)
+	# Surface intersection asphalt deck cleanly at y = 0.0
+	flat_batch.add_box(Vector3(0.0, -0.05, 0.0), Vector3(total_ns_half * 2.0, 0.10, ew_half * 2.0), intersection_mat)
+
+	# Portal bridge plaza walkways, bridge parapets, and yellow/black clearance warning headers
+	var plaza_d := portal_z - ew_half
+	for sz in [-1.0, 1.0]:
+		var fz: float = float(sz)
+		# Raised walkway plaza over the tunnel portal mouth
+		flat_batch.add_box(Vector3(0.0, 0.03, fz * (ew_half + plaza_d * 0.5)), Vector3(wall_outer * 2.0, 0.26, plaza_d), sidewalk_mat)
+		# Bridge safety parapet wall & railing along portal lip
+		solid_batch.add_box(Vector3(0.0, 0.58, fz * (portal_z - 0.38)), Vector3(wall_outer * 2.0, 0.86, 0.72), concrete_wall_mat)
+		solid_batch.add_box(Vector3(0.0, 1.12, fz * (portal_z - 0.38)), Vector3(wall_outer * 2.0, 0.09, 0.14), portal_trim_mat)
+
+		# Portal header steel frame + alternating yellow/black 4.5m clearance hazard stripes
+		var face_z := fz * (portal_z + 0.06)
+		solid_batch.add_box(Vector3(0.0, -0.48, face_z), Vector3(under_half * 2.0 + 0.6, 0.76, 0.16), portal_trim_mat)
+		var stripe_w := 1.15
+		var sx_pos := -under_half + stripe_w * 0.5
+		var s_idx := 0
+		while sx_pos < under_half - 0.2:
+			var sw := minf(stripe_w, under_half - (sx_pos - stripe_w * 0.5))
+			var smat := yellow_line_mat if (s_idx % 2 == 0) else portal_trim_mat
+			flat_batch.add_box(Vector3(sx_pos, -0.56, fz * (portal_z + 0.15)), Vector3(sw - 0.04, 0.42, 0.06), smat)
+			sx_pos += stripe_w
+			s_idx += 1
+
+	# 6. Full E-W Overpass Road Arms (y = 0.0)
+	var ew_arm_len := ROAD_HALF_LEN - total_ns_half
+	var ew_arm_center := total_ns_half + ew_arm_len * 0.5
+	flat_batch.add_box(Vector3(ew_arm_center, -0.10, 0.0), Vector3(ew_arm_len, 0.20, ew_half * 2.0), asphalt_mat)
+	flat_batch.add_box(Vector3(-ew_arm_center, -0.10, 0.0), Vector3(ew_arm_len, 0.20, ew_half * 2.0), asphalt_mat)
+
+	# E-W road markings (double yellow, dashed lanes, stop bars & crosswalks if surface frontage exists)
+	var ew_mark_start := stop_x + 0.3 if s_lanes > 0 else total_ns_half + 0.3
+	var ew_mark_len := maxf(2.0, ROAD_HALF_LEN - ew_mark_start)
+	var ew_mark_mid := ew_mark_start + ew_mark_len * 0.5
+	for sx in [-1.0, 1.0]:
+		var fx: float = float(sx)
+		flat_batch.add_plane_xz(Vector3(fx * ew_mark_mid, mark_y, -0.15), Vector2(ew_mark_len, 0.14), yellow_line_mat)
+		flat_batch.add_plane_xz(Vector3(fx * ew_mark_mid, mark_y, 0.15), Vector2(ew_mark_len, 0.14), yellow_line_mat)
+		if s_lanes == 0:
+			# Continuous yellow centerline straight across pure grade-separated overpass deck
+			flat_batch.add_plane_xz(Vector3(0.0, mark_y, -0.15), Vector2(total_ns_half * 2.0, 0.14), yellow_line_mat)
+			flat_batch.add_plane_xz(Vector3(0.0, mark_y, 0.15), Vector2(total_ns_half * 2.0, 0.14), yellow_line_mat)
+		for l in range(1, ew_lanes):
+			var lz := float(l) * LANE_WIDTH
+			var xp := ew_mark_start + 2.5
+			while xp < ROAD_HALF_LEN - 2.0:
+				flat_batch.add_plane_xz(Vector3(fx * xp, mark_y, -lz), Vector2(2.8, 0.14), white_line_mat)
+				flat_batch.add_plane_xz(Vector3(fx * xp, mark_y, lz), Vector2(2.8, 0.14), white_line_mat)
+				xp += 6.0
+		if s_lanes > 0:
+			var incoming_z_sign: float = -fx
+			flat_batch.add_plane_xz(Vector3(fx * stop_x, mark_y, incoming_z_sign * (ew_half * 0.5)), Vector2(0.45, ew_half - 0.3), white_line_mat)
+			var cw_x := fx * (total_ns_half + 1.55)
+			var stripe_z := -ew_half + 0.9
+			while stripe_z <= ew_half - 0.8:
+				flat_batch.add_plane_xz(Vector3(cw_x, mark_y, stripe_z), Vector2(2.0, 0.75), white_line_mat)
+				stripe_z += 1.75
+
+	# 7. Surface N-S Frontage Roads flanking the retaining walls (when s_lanes > 0)
+	if s_lanes > 0:
+		var front_len := ROAD_HALF_LEN - ew_half
+		var front_cz := ew_half + front_len * 0.5
+		var front_cx := wall_outer + surf_w * 0.5
+		for sz in [-1.0, 1.0]:
+			var fz: float = float(sz)
+			for sx in [-1.0, 1.0]:
+				var fx: float = float(sx)
+				flat_batch.add_box(Vector3(fx * front_cx, -0.10, fz * front_cz), Vector3(surf_w, 0.20, front_len), asphalt_mat)
+				# Dashed dividers between multiple frontage lanes
+				for sl in range(1, s_lanes):
+					var lx := wall_outer + float(sl) * LANE_WIDTH
+					var zp := stop_z + 2.6
+					while zp < ROAD_HALF_LEN - 2.0:
+						flat_batch.add_plane_xz(Vector3(fx * lx, mark_y, fz * zp), Vector2(0.14, 2.8), white_line_mat)
+						zp += 6.0
+				# Crosswalk stripes across frontage roads at ew_half + 1.55
+				var cw_z := fz * (ew_half + 1.55)
+				var u_s := wall_outer + 0.75
+				while u_s <= total_ns_half - 0.65:
+					flat_batch.add_plane_xz(Vector3(fx * u_s, mark_y, cw_z), Vector2(0.75, 2.0), white_line_mat)
+					u_s += 1.72
+			# Stop bar ONLY on the incoming frontage half (fz=-1 -> -X incoming; fz=+1 -> +X incoming)
+			var incoming_x_sign: float = fz
+			flat_batch.add_plane_xz(Vector3(incoming_x_sign * front_cx, mark_y, fz * stop_z), Vector2(surf_w - 0.3, 0.45), white_line_mat)
+
+	# 8. Corner Urban Blocks, Congestion Bars, and Construction Cones
+	_build_corner_blocks(flat_batch, solid_batch, total_ns_half, ew_half)
+	_build_congestion_bars(total_ns_half, ew_half, stop_z, stop_x)
+	_build_underpass_cones(solid_batch, ns_lanes, ew_lanes, lay, stop_z, stop_x, lane_enabled, approach_enabled)
+
+func _build_underpass_cones(solid_batch: MeshBatch, ns_lanes: int, ew_lanes: int, lay: Dictionary, stop_z: float, stop_x: float, lane_enabled: Array[bool], approach_enabled: Array[bool]) -> void:
+	var forwards := [Vector3(0, 0, 1), Vector3(0, 0, -1), Vector3(-1, 0, 0), Vector3(1, 0, 0)]
+	var rights := [Vector3(-1, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 0, 1)]
+	var u_lanes: int = lay["u_lanes"]
+	var z_top: float = lay["z_top"]
+	for a in range(4):
+		var f: Vector3 = forwards[a]
+		var r: Vector3 = rights[a]
+		var is_ns := (a == 0 or a == 1)
+		var l_cnt := ns_lanes if is_ns else ew_lanes
+		for l in range(l_cnt):
+			var closed: bool = (not approach_enabled[a]) or (l < lane_enabled.size() and not lane_enabled[l])
+			if closed:
+				var d: float = get_underpass_lane_offset(l, lay) if is_ns else ((float(l) + 0.5) * LANE_WIDTH)
+				var s_dist: float = (z_top + 1.5) if (is_ns and l < u_lanes) else (stop_z if is_ns else stop_x)
+				for dist in [s_dist + 2.5, s_dist + 8.5, s_dist + 14.5]:
+					var pos: Vector3 = -f * float(dist) + r * d
+					_add_cone(solid_batch, pos)
 
 func _build_signalized_geometry(flat_batch: MeshBatch, solid_batch: MeshBatch, ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_enabled: Array[bool]) -> void:
 	var ns_half: float = ns_lanes * LANE_WIDTH
