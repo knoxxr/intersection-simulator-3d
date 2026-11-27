@@ -61,6 +61,8 @@ var _style_slider_bg: StyleBoxFlat
 var _style_slider_fill: StyleBoxFlat
 var _icon_pause: ImageTexture
 var _icon_play: ImageTexture
+var _icon_plus: ImageTexture
+var _icon_minus: ImageTexture
 
 func bind_simulation(main_sim: IntersectionMain) -> void:
 	sim = main_sim
@@ -115,6 +117,8 @@ func _init_styles() -> void:
 
 	_icon_pause = _create_pause_icon()
 	_icon_play = _create_play_icon()
+	_icon_plus = _create_zoom_icon(true)
+	_icon_minus = _create_zoom_icon(false)
 
 func _create_pause_icon() -> ImageTexture:
 	var s := 18
@@ -146,6 +150,22 @@ func _create_play_icon() -> ImageTexture:
 				if fx >= x0 and fx <= max_x:
 					var edge_a := clampf(max_x - fx + 0.5, 0.0, 1.0)
 					img.set_pixel(x, y, Color(col.r, col.g, col.b, edge_a))
+	return ImageTexture.create_from_image(img)
+
+func _create_zoom_icon(is_plus: bool) -> ImageTexture:
+	var s := 20
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var col := Color(0.95, 0.97, 1.0, 1.0)
+	# Horizontal bar (14px wide x 2px thick, centered)
+	for y in range(9, 11):
+		for x in range(3, 17):
+			img.set_pixel(x, y, col)
+	# Vertical bar for plus icon
+	if is_plus:
+		for y in range(3, 17):
+			for x in range(9, 11):
+				img.set_pixel(x, y, col)
 	return ImageTexture.create_from_image(img)
 
 func _make_box(bg: Color, border: Color, radius: int, pad_x: int, pad_y: int) -> StyleBoxFlat:
@@ -388,16 +408,20 @@ func _build_mobile_ui(portrait: bool = true) -> void:
 	add_child(floating_controls)
 
 	var zoom_in_btn := Button.new()
-	zoom_in_btn.text = "+"
+	zoom_in_btn.text = ""
+	zoom_in_btn.icon = _icon_plus
+	zoom_in_btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	zoom_in_btn.custom_minimum_size = Vector2(46, 44)
-	_style_button(zoom_in_btn, false, 44, 20)
+	_style_button(zoom_in_btn, false, 44, 16)
 	zoom_in_btn.pressed.connect(func(): sim.orbit_camera.zoom_in())
 	floating_controls.add_child(zoom_in_btn)
 
 	var zoom_out_btn := Button.new()
-	zoom_out_btn.text = "−"
+	zoom_out_btn.text = ""
+	zoom_out_btn.icon = _icon_minus
+	zoom_out_btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	zoom_out_btn.custom_minimum_size = Vector2(46, 44)
-	_style_button(zoom_out_btn, false, 44, 20)
+	_style_button(zoom_out_btn, false, 44, 16)
 	zoom_out_btn.pressed.connect(func(): sim.orbit_camera.zoom_out())
 	floating_controls.add_child(zoom_out_btn)
 
