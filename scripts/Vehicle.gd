@@ -169,6 +169,7 @@ var vehicle_length: float = 4.2
 var forward: Vector3 = Vector3(0, 0, 1)
 var is_waiting: bool = false
 var wait_time: float = 0.0
+var stuck_timer: float = 0.0
 var has_passed_intersection: bool = false
 var finished: bool = false
 
@@ -322,13 +323,21 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, nearby_vehicles
 
 	var must_stop_dist := 9999.0
 
-	# 1. Traffic signal OR Roundabout yield-on-entry check
+	# Track deadlock ONLY if stalled while already inside the intersection/roundabout box
+	var in_box_now := (progress >= stop_progress - 0.5 and progress <= exit_box_progress + 2.0)
+	if in_box_now and speed < 0.45:
+		stuck_timer += delta
+	elif speed > 1.2 or not in_box_now:
+		stuck_timer = 0.0
+	var clearing_deadlock := (stuck_timer > 1.8)
+
+	# 1. Traffic signal OR Roundabout yield-on-entry check (only before crossing stop/yield line)
 	var dist_to_stop := stop_progress - (progress + vehicle_length * 0.52)
 	if dist_to_stop > -0.8 and progress < stop_progress:
 		if is_roundabout:
-			if dist_to_stop < 12.0:
-				target_speed = min(target_speed, 9.5 if is_emergency else 7.8)
-			if dist_to_stop < 8.5 and _has_roundabout_conflict(in_box_vehicles):
+			if dist_to_stop < 13.0:
+				target_speed = min(target_speed, 9.5 if is_emergency else 7.6)
+			if dist_to_stop < 9.5 and _has_roundabout_conflict(in_box_vehicles):
 				must_stop_dist = min(must_stop_dist, max(0.0, dist_to_stop))
 		else:
 			var aspect := traffic_ctrl.get_signal_for(approach_idx, turn_type)
@@ -347,13 +356,17 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, nearby_vehicles
 				if dist_to_stop < 6.0 and _has_oncoming_straight(in_box_vehicles):
 					must_stop_dist = min(must_stop_dist, max(0.0, dist_to_stop))
 
-	# 2. Spatial-grid car-following & collision avoidance (only checks nearby cells!)
-	var min_gap := 2.0
+	# 2. Spatial-grid car-following & asymmetric crossing priority (prevents mutual deadlocks!)
+	var min_gap := 2.1
+	var follow_lat := 2.35 if (is_roundabout or inside_intersection) else 1.85
+	var follow_dot := 0.45 if (is_roundabout or inside_intersection) else 0.65
+
 	for other in nearby_vehicles:
 		if other == self or other.finished:
 			continue
 		var other_v: SimVehicle = other
 		var rel: Vector3 = other_v.position - position
+		rel.y = 0.0
 		var dist_sq := rel.length_squared()
 		if dist_sq > 576.0:
 			continue
@@ -362,21 +375,34 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, nearby_vehicles
 		if fwd_dist <= 0.1:
 			continue
 		var lat_dist := absf(rel.dot(Vector3(-forward.z, 0.0, forward.x)))
-
 		var dir_dot: float = forward.dot(other_v.forward)
-		if dir_dot > 0.65 and lat_dist < 1.85:
+
+		if dir_dot > follow_dot and lat_dist < follow_lat:
+			# Same-direction car-following (including curved roundabout arcs)
+			# Break rare angled or full-ring lockups inside the intersection box
+			if clearing_deadlock and other_v.speed < 0.5:
+				if dir_dot < 0.85:
+					continue
+				if stuck_timer > 2.6 and other_v.stuck_timer > 1.8 and (exit_box_progress - progress) < (other_v.exit_box_progress - other_v.progress):
+					continue
 			var gap: float = fwd_dist - (vehicle_length * 0.5 + other_v.vehicle_length * 0.5) - min_gap
 			if gap < must_stop_dist:
 				must_stop_dist = gap
-				if gap < 6.0:
+				if gap < 7.0:
 					target_speed = min(target_speed, other_v.speed)
-		elif dir_dot <= 0.65 and lat_dist < 2.6 and fwd_dist < 10.5:
-			var gap: float = fwd_dist - (vehicle_length * 0.5 + 1.8) - 1.2
-			if gap < must_stop_dist:
-				must_stop_dist = gap
+		elif dir_dot <= follow_dot and lat_dist < 2.6 and fwd_dist < 10.0:
+			# Crossing / merging vehicle conflict — apply ASYMMETRIC priority so BOTH cars never deadlock!
+			if clearing_deadlock:
+				continue
+			if _should_yield_to_crossing(other_v, rel):
+				var gap: float = fwd_dist - (vehicle_length * 0.5 + 1.9) - 1.2
+				if gap < must_stop_dist:
+					must_stop_dist = gap
 
 	# 3. Smooth acceleration / braking
 	var desired_speed := target_speed
+	if clearing_deadlock:
+		desired_speed = min(desired_speed, 5.2)
 	if must_stop_dist < 18.0:
 		if must_stop_dist <= 0.15:
 			desired_speed = 0.0
@@ -409,24 +435,61 @@ func step_vehicle(delta: float, traffic_ctrl: TrafficController, nearby_vehicles
 
 	_apply_transform_at(progress)
 
+func _should_yield_to_crossing(other_v: SimVehicle, rel: Vector3) -> bool:
+	# Emergency vehicles take priority
+	if is_emergency and not other_v.is_emergency:
+		return false
+	if other_v.is_emergency and not is_emergency:
+		return true
+
+	# If the other car is moving swiftly across our nose while we are slower, yield to it
+	if other_v.speed > 2.5 and speed < 1.5:
+		return true
+
+	# Check if we are ALSO in front of the other car (potential mutual deadlock!)
+	var other_sees_us_ahead := (-rel).dot(other_v.forward) > 0.1
+	if not other_sees_us_ahead:
+		# Other car's rear/side is right in front of us -> we must yield cleanly
+		return true
+
+	# Both cars see each other ahead -> strict deterministic priority so ONLY ONE yields!
+	var my_in := progress >= stop_progress
+	var other_in := other_v.progress >= other_v.stop_progress
+	if my_in and not other_in:
+		return false # Already circulating/inside has priority over entering
+	if other_in and not my_in:
+		return true
+
+	# Whoever is closer to exiting clears the intersection first
+	var my_rem := exit_box_progress - progress
+	var other_rem := other_v.exit_box_progress - other_v.progress
+	if absf(my_rem - other_rem) > 1.5:
+		return my_rem > other_rem
+
+	# Final deterministic tie-breaker by instance ID (impossible for both to return true!)
+	return get_instance_id() < other_v.get_instance_id()
+
 func _has_roundabout_conflict(in_box_vehicles: Array) -> bool:
 	for other in in_box_vehicles:
 		if other == self or other.finished:
 			continue
 		var other_v: SimVehicle = other
+		# Only yield to vehicles already circulating inside the roundabout ring
+		if other_v.progress < other_v.stop_progress - 0.5 or other_v.progress > other_v.exit_box_progress:
+			continue
 		if other_v.approach_idx == approach_idx and other_v.lane_idx == lane_idx:
 			continue
 		var to_entry := yield_world_pos - other_v.position
 		to_entry.y = 0.0
 		var dist := to_entry.length()
-		if dist > 12.5:
+		if dist > 17.5:
 			continue
-		var radial_diff := absf(other_v.ring_radius - ring_radius)
-		if radial_diff > 3.2 and dist > 5.5:
+		# Must yield to circulating cars in our target ring lane AND any outer ring lane we have to cross!
+		if other_v.ring_radius < ring_radius - 3.6 and dist > 6.5:
 			continue
-		if dist < 4.8:
+		if dist < 6.0:
 			return true
-		if other_v.forward.dot(to_entry / dist) > 0.38:
+		if other_v.forward.dot(to_entry / dist) > 0.28:
 			return true
 	return false
 
