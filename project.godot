@@ -9,7 +9,9 @@ config_version=5
 config/name="3D Intersection Traffic Simulator"
 run/main_scene="res://scenes/Intersection.tscn"
 config/features=PackedStringArray("4.3", "GL Compatibility")
-config/icon=""
+config/icon="res://assets/icon.png"
+boot_splash/bg_color=Color(0.06, 0.09, 0.16, 1)
+boot_splash/image="res://assets/icon.png"
 
 [display]
 
