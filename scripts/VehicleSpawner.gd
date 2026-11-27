@@ -6,11 +6,12 @@ const SPAWN_DIST: float = 110.0
 const MAX_VEHICLES: int = 180
 const GRID_CELL: float = 16.0
 
-# Live configurable simulation settings (1..10 lanes per direction, Signalized, Roundabout, or Underpass)
+# Live configurable simulation settings (1..10 lanes per direction, Signalized, Roundabout, Underpass, or Overpass)
 var ns_lanes: int = 2
 var ew_lanes: int = 2
 var is_roundabout: bool = false
 var is_underpass: bool = false
+var is_overpass: bool = false
 var lane_enabled: Array[bool] = [true, true, true, true, true, true, true, true, true, true]
 var approach_enabled: Array[bool] = [true, true, true, true] # N, S, E, W
 var global_traffic_rate: float = 1.0
@@ -193,7 +194,7 @@ func _try_spawn_on_approach(approach_idx: int) -> void:
 		turn_type = TrafficController.TurnType.RIGHT
 
 	var chosen_lane := _pick_lane_for_turn(open_lanes, l_cnt, turn_type)
-	if is_underpass:
+	if is_underpass or is_overpass:
 		var lay := RoadBuilder.get_underpass_layout(ns_lanes, ew_lanes)
 		var u_lanes: int = lay["u_lanes"]
 		var s_lanes: int = lay["s_lanes"]
@@ -277,7 +278,7 @@ func _pick_lane_for_turn(open_lanes: Array[int], total_lanes: int, turn_type: in
 		return open_lanes[randi() % open_lanes.size()]
 
 func _build_path(approach_idx: int, lane_idx: int, turn_type: int) -> Dictionary:
-	if is_underpass:
+	if is_underpass or is_overpass:
 		return _build_underpass_path(approach_idx, lane_idx, turn_type)
 	if is_roundabout:
 		return _build_roundabout_path(approach_idx, lane_idx, turn_type)
@@ -299,9 +300,9 @@ func _build_underpass_path(approach_idx: int, lane_idx: int, turn_type: int) -> 
 	var portal_z: float = lay["portal_z"]
 	var z_bot: float = lay["z_bot"]
 	var z_top: float = lay["z_top"]
-	var depth: float = lay["depth"]
+	var elev_y: float = 6.0 if is_overpass else float(lay["depth"])
 
-	# Subcase A: N-S Underground Express Lane (smooth 3D S-curve ramp down, flat tunnel under deck, ramp up)
+	# Subcase A: N-S Grade-Separated Express Lane (Underpass -5.4m OR Overpass +6.0m)
 	if is_ns and lane_idx < u_lanes:
 		var d_u := RoadBuilder.get_underpass_lane_offset(lane_idx, lay)
 		var pts := PackedVector3Array()
@@ -312,7 +313,7 @@ func _build_underpass_path(approach_idx: int, lane_idx: int, turn_type: int) -> 
 		var ramp_steps := 18
 		for i in range(ramp_steps + 1):
 			var dist_z := lerpf(z_top, z_bot, float(i) / float(ramp_steps))
-			var y := RoadBuilder.get_underpass_y(dist_z, z_bot, z_top, depth)
+			var y := RoadBuilder.get_underpass_y(dist_z, z_bot, z_top, elev_y)
 			var p := -f * dist_z + r * d_u
 			p.y = y
 			pts.append(p)
@@ -320,7 +321,7 @@ func _build_underpass_path(approach_idx: int, lane_idx: int, turn_type: int) -> 
 		# Exit ramp (+z_bot .. +z_top)
 		for i in range(ramp_steps + 1):
 			var dist_z := lerpf(z_bot, z_top, float(i) / float(ramp_steps))
-			var y := RoadBuilder.get_underpass_y(dist_z, z_bot, z_top, depth)
+			var y := RoadBuilder.get_underpass_y(dist_z, z_bot, z_top, elev_y)
 			var p := f * dist_z + r * d_u
 			p.y = y
 			pts.append(p)

@@ -5,7 +5,7 @@ const LANE_WIDTH: float = 3.5
 const ROAD_HALF_LEN: float = 115.0
 
 enum TimeOfDay { DAY, SUNSET, NIGHT }
-enum IntersectionType { SIGNALIZED, ROUNDABOUT, UNDERPASS }
+enum IntersectionType { SIGNALIZED, ROUNDABOUT, UNDERPASS, OVERPASS }
 
 var dynamic_root: Node3D
 var env_built: bool = false
@@ -252,12 +252,302 @@ func rebuild(ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_e
 		flat_batch.add_box(Vector3(0, -0.45, 0), Vector3(480, 0.4, 480), grass_mat)
 		if itype == IntersectionType.ROUNDABOUT:
 			_build_roundabout_geometry(flat_batch, solid_batch, ns_lanes, ew_lanes, lane_enabled, approach_enabled)
+		elif itype == IntersectionType.OVERPASS:
+			_build_overpass_geometry(flat_batch, solid_batch, ns_lanes, ew_lanes, lane_enabled, approach_enabled)
 		else:
 			_build_signalized_geometry(flat_batch, solid_batch, ns_lanes, ew_lanes, lane_enabled, approach_enabled)
 
-	# Commit entire world into ~16-24 batched MeshInstance3D draw calls (down from 1,500+!)
+	# Commit entire world into ~16-30 batched MeshInstance3D draw calls (down from 1,500+!)
 	flat_batch.commit_as_nodes(dynamic_root, false)
 	solid_batch.commit_as_nodes(dynamic_root, true)
+
+func _build_overpass_geometry(flat_batch: MeshBatch, solid_batch: MeshBatch, ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_enabled: Array[bool]) -> void:
+	var lay := get_underpass_layout(ns_lanes, ew_lanes)
+	var u_lanes: int = lay["u_lanes"]
+	var s_lanes: int = lay["s_lanes"]
+	var bridge_half: float = lay["under_half"]
+	var wall_w: float = lay["wall_w"]
+	var surf_w: float = lay["surf_w"]
+	var total_ns_half: float = lay["total_ns_half"]
+	var ew_half: float = lay["ew_half"]
+	var z_bot: float = lay["z_bot"]
+	var z_top: float = lay["z_top"]
+	var height: float = 6.0
+	var girder_thick: float = 0.95
+	var mark_y: float = 0.05
+
+	var stop_z: float = ew_half + 3.2
+	var stop_x: float = total_ns_half + 3.2
+	var wall_outer: float = bridge_half + wall_w
+
+	# 1. Surface Intersection Box & Full E-W Street passing cleanly underneath the overpass (y = 0.0)
+	flat_batch.add_box(Vector3(0.0, -0.10, 0.0), Vector3(total_ns_half * 2.0, 0.20, ew_half * 2.0), intersection_mat)
+	var ew_arm_len := ROAD_HALF_LEN - total_ns_half
+	var ew_arm_center := total_ns_half + ew_arm_len * 0.5
+	flat_batch.add_box(Vector3(ew_arm_center, -0.10, 0.0), Vector3(ew_arm_len, 0.20, ew_half * 2.0), asphalt_mat)
+	flat_batch.add_box(Vector3(-ew_arm_center, -0.10, 0.0), Vector3(ew_arm_len, 0.20, ew_half * 2.0), asphalt_mat)
+
+	# E-W road markings (under the bridge & along arms)
+	var ew_mark_start := stop_x + 0.3 if s_lanes > 0 else total_ns_half + 0.3
+	var ew_mark_len := maxf(2.0, ROAD_HALF_LEN - ew_mark_start)
+	var ew_mark_mid := ew_mark_start + ew_mark_len * 0.5
+	for sx in [-1.0, 1.0]:
+		var fx: float = float(sx)
+		flat_batch.add_plane_xz(Vector3(fx * ew_mark_mid, mark_y, -0.15), Vector2(ew_mark_len, 0.14), yellow_line_mat)
+		flat_batch.add_plane_xz(Vector3(fx * ew_mark_mid, mark_y, 0.15), Vector2(ew_mark_len, 0.14), yellow_line_mat)
+		if s_lanes == 0:
+			flat_batch.add_plane_xz(Vector3(0.0, mark_y, -0.15), Vector2(total_ns_half * 2.0, 0.14), yellow_line_mat)
+			flat_batch.add_plane_xz(Vector3(0.0, mark_y, 0.15), Vector2(total_ns_half * 2.0, 0.14), yellow_line_mat)
+		for l in range(1, ew_lanes):
+			var lz := float(l) * LANE_WIDTH
+			var xp := ew_mark_start + 2.5
+			while xp < ROAD_HALF_LEN - 2.0:
+				flat_batch.add_plane_xz(Vector3(fx * xp, mark_y, -lz), Vector2(2.8, 0.14), white_line_mat)
+				flat_batch.add_plane_xz(Vector3(fx * xp, mark_y, lz), Vector2(2.8, 0.14), white_line_mat)
+				xp += 6.0
+		if s_lanes > 0:
+			var incoming_z_sign: float = -fx
+			flat_batch.add_plane_xz(Vector3(fx * stop_x, mark_y, incoming_z_sign * (ew_half * 0.5)), Vector2(0.45, ew_half - 0.3), white_line_mat)
+			var cw_x := fx * (total_ns_half + 1.55)
+			var stripe_z := -ew_half + 0.9
+			while stripe_z <= ew_half - 0.8:
+				flat_batch.add_plane_xz(Vector3(cw_x, mark_y, stripe_z), Vector2(2.0, 0.75), white_line_mat)
+				stripe_z += 1.75
+
+	# 2. Under-Bridge Pier Median Islands (|z| in [ew_half, z_top], |x| <= wall_outer) & Surface Frontage Roads
+	var under_island_len := maxf(1.0, z_top - ew_half)
+	var under_island_cz := ew_half + under_island_len * 0.5
+	for sz in [-1.0, 1.0]:
+		var fz: float = float(sz)
+		flat_batch.add_box(Vector3(0.0, -0.02, fz * under_island_cz), Vector3(wall_outer * 2.0, 0.20, under_island_len), sidewalk_mat)
+
+	if s_lanes > 0:
+		var front_len := ROAD_HALF_LEN - ew_half
+		var front_cz := ew_half + front_len * 0.5
+		var front_cx := wall_outer + surf_w * 0.5
+		for sz in [-1.0, 1.0]:
+			var fz: float = float(sz)
+			for sx in [-1.0, 1.0]:
+				var fx: float = float(sx)
+				flat_batch.add_box(Vector3(fx * front_cx, -0.10, fz * front_cz), Vector3(surf_w, 0.20, front_len), asphalt_mat)
+				for sl in range(1, s_lanes):
+					var lx := wall_outer + float(sl) * LANE_WIDTH
+					var zp := stop_z + 2.6
+					while zp < ROAD_HALF_LEN - 2.0:
+						flat_batch.add_plane_xz(Vector3(fx * lx, mark_y, fz * zp), Vector2(0.14, 2.8), white_line_mat)
+						zp += 6.0
+				var cw_z := fz * (ew_half + 1.55)
+				var u_s := wall_outer + 0.75
+				while u_s <= total_ns_half - 0.65:
+					flat_batch.add_plane_xz(Vector3(fx * u_s, mark_y, cw_z), Vector2(0.75, 2.0), white_line_mat)
+					u_s += 1.72
+			var incoming_x_sign: float = fz
+			flat_batch.add_plane_xz(Vector3(incoming_x_sign * front_cx, mark_y, fz * stop_z), Vector2(surf_w - 0.3, 0.45), white_line_mat)
+
+	# 3. Elevated Flat Bridge Deck Span (|z| <= z_bot at y = +6.0m)
+	# Concrete box girder structural slab
+	solid_batch.add_box(Vector3(0.0, height - girder_thick * 0.5 - 0.05, 0.0), Vector3(wall_outer * 2.0, girder_thick - 0.10, z_bot * 2.0), concrete_wall_mat)
+	# Asphalt wearing surface on deck (top cleanly at y = height)
+	flat_batch.add_box(Vector3(0.0, height - 0.05, 0.0), Vector3(bridge_half * 2.0, 0.10, z_bot * 2.0), asphalt_mat)
+	# Elevated deck markings
+	flat_batch.add_plane_xz(Vector3(-0.15, height + mark_y, 0.0), Vector2(0.14, z_bot * 2.0), yellow_line_mat)
+	flat_batch.add_plane_xz(Vector3(0.15, height + mark_y, 0.0), Vector2(0.14, z_bot * 2.0), yellow_line_mat)
+	for sx in [-1.0, 1.0]:
+		var fx: float = float(sx)
+		flat_batch.add_plane_xz(Vector3(fx * (bridge_half - 0.18), height + mark_y, 0.0), Vector2(0.14, z_bot * 2.0), white_line_mat)
+		# Bridge concrete parapets + dark steel railing
+		solid_batch.add_box(Vector3(fx * (bridge_half + wall_w * 0.5), height + 0.45, 0.0), Vector3(wall_w, 0.90, z_bot * 2.0), concrete_wall_mat)
+		solid_batch.add_box(Vector3(fx * (bridge_half + wall_w * 0.5), height + 1.03, 0.0), Vector3(0.14, 0.09, z_bot * 2.0), portal_trim_mat)
+		for l in range(1, u_lanes):
+			var lx := float(l) * LANE_WIDTH
+			var zp := -z_bot + 1.8
+			while zp < z_bot - 1.5:
+				flat_batch.add_plane_xz(Vector3(fx * lx, height + mark_y, zp), Vector2(0.14, 2.6), white_line_mat)
+				zp += 5.6
+
+	# 4. Smooth S-Curve Elevated Viaduct Ramps (|z| from z_bot down to z_top)
+	var slices := 22
+	var taper_start := z_top - 5.0
+	for sz in [-1.0, 1.0]:
+		var fz: float = float(sz)
+		for i in range(slices):
+			var za := lerpf(z_bot, z_top, float(i) / float(slices))
+			var zb := lerpf(z_bot, z_top, float(i + 1) / float(slices))
+			var ya := get_underpass_y(za, z_bot, z_top, height)
+			var yb := get_underpass_y(zb, z_bot, z_top, height)
+			var z0 := fz * za
+			var z1 := fz * zb
+			var n_up := Vector3(0.0, zb - za, -(yb - ya) * fz).normalized()
+			var n_dn := -n_up
+
+			# Sloped asphalt deck surface
+			flat_batch.add_quad_normal(
+				Vector3(-bridge_half, ya, z0),
+				Vector3(bridge_half, ya, z0),
+				Vector3(bridge_half, yb, z1),
+				Vector3(-bridge_half, yb, z1),
+				n_up,
+				asphalt_mat
+			)
+
+			# Ramp girder underside (open viaduct when high, solid abutment when near ground)
+			var ya_bot := maxf(-0.04, ya - girder_thick) if ya > 2.4 else -0.04
+			var yb_bot := maxf(-0.04, yb - girder_thick) if yb > 2.4 else -0.04
+			if ya_bot > 0.1 or yb_bot > 0.1:
+				flat_batch.add_quad_normal(
+					Vector3(-wall_outer, ya_bot, z0),
+					Vector3(wall_outer, ya_bot, z0),
+					Vector3(wall_outer, yb_bot, z1),
+					Vector3(-wall_outer, yb_bot, z1),
+					n_dn,
+					concrete_wall_mat
+				)
+
+			# Ramp markings: double yellow centerline, white edge lines, dashed white lane lines
+			for side_s in [-1.0, 1.0]:
+				var xc: float = float(side_s) * 0.15
+				flat_batch.add_quad_normal(
+					Vector3(xc - 0.07, ya + mark_y, z0),
+					Vector3(xc + 0.07, ya + mark_y, z0),
+					Vector3(xc + 0.07, yb + mark_y, z1),
+					Vector3(xc - 0.07, yb + mark_y, z1),
+					n_up,
+					yellow_line_mat
+				)
+				var xe: float = float(side_s) * (bridge_half - 0.18)
+				flat_batch.add_quad_normal(
+					Vector3(xe - 0.07, ya + mark_y, z0),
+					Vector3(xe + 0.07, ya + mark_y, z0),
+					Vector3(xe + 0.07, yb + mark_y, z1),
+					Vector3(xe - 0.07, yb + mark_y, z1),
+					n_up,
+					white_line_mat
+				)
+				if i % 2 == 0:
+					for l in range(1, u_lanes):
+						var xl: float = float(side_s) * float(l) * LANE_WIDTH
+						flat_batch.add_quad_normal(
+							Vector3(xl - 0.07, ya + mark_y, z0),
+							Vector3(xl + 0.07, ya + mark_y, z0),
+							Vector3(xl + 0.07, yb + mark_y, z1),
+							Vector3(xl - 0.07, yb + mark_y, z1),
+							n_up,
+							white_line_mat
+						)
+
+			# Side fascia / abutment walls & tapered bridge parapets
+			var par_a := 0.90 if za <= taper_start else lerpf(0.90, 0.18, clampf((za - taper_start) / 5.0, 0.0, 1.0))
+			var par_b := 0.90 if zb <= taper_start else lerpf(0.90, 0.18, clampf((zb - taper_start) / 5.0, 0.0, 1.0))
+			var top_a := ya + par_a
+			var top_b := yb + par_b
+			for sx in [-1.0, 1.0]:
+				var fx: float = float(sx)
+				var xi := fx * bridge_half
+				var xo := fx * wall_outer
+				# Inner parapet wall facing ramp roadbed
+				flat_batch.add_quad_normal(
+					Vector3(xi, ya - 0.05, z0),
+					Vector3(xi, yb - 0.05, z1),
+					Vector3(xi, top_b, z1),
+					Vector3(xi, top_a, z0),
+					Vector3(-fx, 0.0, 0.0),
+					concrete_wall_mat
+				)
+				# Outer viaduct fascia / embankment wall facing surface frontage road
+				flat_batch.add_quad_normal(
+					Vector3(xo, ya_bot, z0),
+					Vector3(xo, yb_bot, z1),
+					Vector3(xo, top_b, z1),
+					Vector3(xo, top_a, z0),
+					Vector3(fx, 0.0, 0.0),
+					concrete_wall_mat
+				)
+				# Top parapet cap
+				flat_batch.add_quad_normal(
+					Vector3(xi, top_a, z0),
+					Vector3(xo, top_a, z0),
+					Vector3(xo, top_b, z1),
+					Vector3(xi, top_b, z1),
+					n_up,
+					sidewalk_mat
+				)
+				# Sloped steel guardrail bar on upper section
+				if za <= taper_start:
+					var rmid := fx * (bridge_half + wall_w * 0.5)
+					flat_batch.add_quad_normal(
+						Vector3(rmid - 0.06, top_a + 0.12, z0),
+						Vector3(rmid + 0.06, top_a + 0.12, z0),
+						Vector3(rmid + 0.06, top_b + 0.12, z1),
+						Vector3(rmid - 0.06, top_b + 0.12, z1),
+						n_up,
+						portal_trim_mat
+					)
+
+		# Flat ground-level express approach beyond ramp foot (z_top .. ROAD_HALF_LEN)
+		var app_len := maxf(1.0, ROAD_HALF_LEN - z_top)
+		var app_cz := fz * (z_top + app_len * 0.5)
+		flat_batch.add_box(Vector3(0.0, -0.10, app_cz), Vector3(bridge_half * 2.0, 0.20, app_len), asphalt_mat)
+		flat_batch.add_plane_xz(Vector3(-0.15, mark_y, app_cz), Vector2(0.14, app_len), yellow_line_mat)
+		flat_batch.add_plane_xz(Vector3(0.15, mark_y, app_cz), Vector2(0.14, app_len), yellow_line_mat)
+		for sx in [-1.0, 1.0]:
+			var fx: float = float(sx)
+			flat_batch.add_plane_xz(Vector3(fx * (bridge_half - 0.18), mark_y, app_cz), Vector2(0.14, app_len), white_line_mat)
+			flat_batch.add_box(Vector3(fx * (bridge_half + wall_w * 0.5), 0.07, app_cz), Vector3(wall_w, 0.18, app_len), sidewalk_mat)
+			for l in range(1, u_lanes):
+				var lx := float(l) * LANE_WIDTH
+				var zp := z_top + 2.2
+				while zp < ROAD_HALF_LEN - 2.0:
+					flat_batch.add_plane_xz(Vector3(fx * lx, mark_y, fz * zp), Vector2(0.14, 2.8), white_line_mat)
+					zp += 6.0
+
+		# Express straight pavement arrows before ramp climb
+		var in_x_sign := fz
+		var fwd_in := Vector3(0.0, 0.0, -fz)
+		var rt_in := Vector3(in_x_sign, 0.0, 0.0)
+		for l in range(u_lanes):
+			var ax := in_x_sign * (float(l) + 0.5) * LANE_WIDTH
+			_add_pavement_arrow(flat_batch, Vector3(ax, mark_y, fz * (z_top + 5.5)), fwd_in, rt_in, white_line_mat)
+
+	# 5. Sculpted Concrete Bridge T-Piers (strictly outside the E-W street!)
+	var pier_z := ew_half + 2.6
+	while pier_z < z_top - 10.0:
+		var deck_y := get_underpass_y(pier_z, z_bot, z_top, height)
+		var under_y := deck_y - girder_thick
+		if under_y >= 2.2:
+			for sz in [-1.0, 1.0]:
+				var pz := float(sz) * pier_z
+				# Hammerhead pier cap beam supporting girder
+				solid_batch.add_box(Vector3(0.0, under_y - 0.38, pz), Vector3(bridge_half * 1.92, 0.78, 1.45), concrete_wall_mat)
+				# Concrete columns down to ground
+				var col_h := under_y - 0.75
+				var col_cy := col_h * 0.5
+				if bridge_half <= 5.5:
+					solid_batch.add_cylinder(Vector3(0.0, col_cy, pz), 0.65, col_h, concrete_wall_mat, Vector3.ZERO, false)
+				else:
+					var col_off := bridge_half * 0.54
+					solid_batch.add_cylinder(Vector3(-col_off, col_cy, pz), 0.62, col_h, concrete_wall_mat, Vector3.ZERO, false)
+					solid_batch.add_cylinder(Vector3(col_off, col_cy, pz), 0.62, col_h, concrete_wall_mat, Vector3.ZERO, false)
+					if bridge_half >= 14.0:
+						solid_batch.add_cylinder(Vector3(0.0, col_cy, pz), 0.62, col_h, concrete_wall_mat, Vector3.ZERO, false)
+		pier_z += 11.0
+
+	# 6. Double-Arm Highway Median Streetlamps on the Elevated Bridge Deck
+	var lamp_z := 0.0
+	while lamp_z <= z_bot + 16.0:
+		var ly := get_underpass_y(lamp_z, z_bot, z_top, height)
+		var zs: Array = [0.0] if lamp_z < 0.1 else [-lamp_z, lamp_z]
+		for z_item in zs:
+			var zz: float = float(z_item)
+			solid_batch.add_tapered_cylinder(Vector3(0.0, ly + 2.7, zz), 0.07, 0.11, 5.4, lamp_pole_mat, 8)
+			solid_batch.add_box(Vector3(0.0, ly + 5.35, zz), Vector3(2.2, 0.09, 0.09), lamp_pole_mat)
+			flat_batch.add_sphere(Vector3(-1.05, ly + 5.25, zz), 0.24, 0.30, lamp_bulb_mat)
+			flat_batch.add_sphere(Vector3(1.05, ly + 5.25, zz), 0.24, 0.30, lamp_bulb_mat)
+		lamp_z += 15.0
+
+	# 7. Corner Urban Blocks, Congestion Bars, and Construction Cones
+	_build_corner_blocks(flat_batch, solid_batch, total_ns_half, ew_half)
+	_build_congestion_bars(total_ns_half, ew_half, stop_z, stop_x)
+	_build_underpass_cones(solid_batch, ns_lanes, ew_lanes, lay, stop_z, stop_x, lane_enabled, approach_enabled)
 
 func _build_underpass_geometry(flat_batch: MeshBatch, solid_batch: MeshBatch, ns_lanes: int, ew_lanes: int, lane_enabled: Array[bool], approach_enabled: Array[bool]) -> void:
 	var lay := get_underpass_layout(ns_lanes, ew_lanes)

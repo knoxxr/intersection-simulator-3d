@@ -170,7 +170,7 @@ func _build_mesh() -> void:
 func set_arm_reach(road_half: float) -> void:
 	if not _pole_built:
 		_build_mesh()
-	var reach := clampf(road_half * 0.55 + 1.6, 3.8, 16.0)
+	var reach := clampf(road_half * 0.55 + 1.2, 2.2, 16.0)
 	var arm_mesh := _arm_node.mesh as CylinderMesh
 	if arm_mesh:
 		arm_mesh.height = reach + 1.4

@@ -720,6 +720,13 @@ func _populate_scenario_controls(parent: VBoxContainer, touch: bool) -> void:
 	row4.add_theme_constant_override("separation", 5)
 	parent.add_child(row4)
 
+	var p_over := Button.new()
+	p_over.text = Lang.t("preset_overpass")
+	p_over.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(p_over, sim.intersection_type == RoadBuilder.IntersectionType.OVERPASS, btn_h, fsz)
+	p_over.pressed.connect(func(): _apply_preset_and_sync("overpass"))
+	row4.add_child(p_over)
+
 	var p_mega := Button.new()
 	p_mega.text = Lang.t("preset_mega10")
 	p_mega.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -877,16 +884,17 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 	var fsz := 14 if touch else 12
 	var cb_fsz := 14 if touch else 12
 
-	# Intersection Type Toggle (Signal vs Roundabout vs Underpass)
-	var type_row := HBoxContainer.new()
-	type_row.add_theme_constant_override("separation", 4)
-	parent.add_child(type_row)
+	# Intersection Type Toggle (2x2 Grid: Signal / Rotary / Underpass / Overpass)
 	var type_lbl := Label.new()
 	type_lbl.text = Lang.t("type_lbl")
 	type_lbl.add_theme_font_size_override("font_size", fsz)
-	type_row.add_child(type_lbl)
+	parent.add_child(type_lbl)
 
 	var itype := sim.intersection_type
+	var type_row1 := HBoxContainer.new()
+	type_row1.add_theme_constant_override("separation", 5)
+	parent.add_child(type_row1)
+
 	var btn_sig := Button.new()
 	btn_sig.text = Lang.t("type_signal")
 	btn_sig.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -895,7 +903,7 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 		sim.set_intersection_type(RoadBuilder.IntersectionType.SIGNALIZED)
 		_sync_scale_and_layout(true)
 	)
-	type_row.add_child(btn_sig)
+	type_row1.add_child(btn_sig)
 
 	var btn_rot := Button.new()
 	btn_rot.text = Lang.t("type_roundabout")
@@ -905,7 +913,11 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 		sim.set_intersection_type(RoadBuilder.IntersectionType.ROUNDABOUT)
 		_sync_scale_and_layout(true)
 	)
-	type_row.add_child(btn_rot)
+	type_row1.add_child(btn_rot)
+
+	var type_row2 := HBoxContainer.new()
+	type_row2.add_theme_constant_override("separation", 5)
+	parent.add_child(type_row2)
 
 	var btn_und := Button.new()
 	btn_und.text = Lang.t("type_underpass")
@@ -915,7 +927,17 @@ func _populate_lane_controls(parent: VBoxContainer, touch: bool) -> void:
 		sim.set_intersection_type(RoadBuilder.IntersectionType.UNDERPASS)
 		_sync_scale_and_layout(true)
 	)
-	type_row.add_child(btn_und)
+	type_row2.add_child(btn_und)
+
+	var btn_ovr := Button.new()
+	btn_ovr.text = Lang.t("type_overpass")
+	btn_ovr.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_button(btn_ovr, itype == RoadBuilder.IntersectionType.OVERPASS, btn_h, fsz)
+	btn_ovr.pressed.connect(func():
+		sim.set_intersection_type(RoadBuilder.IntersectionType.OVERPASS)
+		_sync_scale_and_layout(true)
+	)
+	type_row2.add_child(btn_ovr)
 
 	# 1..10 Lanes per Direction Sliders (N-S & E-W independently)
 	ns_lane_btns.clear()
@@ -1039,7 +1061,12 @@ func _populate_signal_controls(parent: VBoxContainer, touch: bool) -> void:
 
 	if sim.intersection_type == RoadBuilder.IntersectionType.ROUNDABOUT or sim.traffic_ctrl.is_grade_separated_only:
 		var note := Label.new()
-		note.text = Lang.t("sig_disabled_rotary") if sim.intersection_type == RoadBuilder.IntersectionType.ROUNDABOUT else Lang.t("sig_disabled_underpass")
+		if sim.intersection_type == RoadBuilder.IntersectionType.ROUNDABOUT:
+			note.text = Lang.t("sig_disabled_rotary")
+		elif sim.intersection_type == RoadBuilder.IntersectionType.OVERPASS:
+			note.text = Lang.t("sig_disabled_overpass")
+		else:
+			note.text = Lang.t("sig_disabled_underpass")
 		note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		note.add_theme_font_size_override("font_size", fsz)
 		note.add_theme_color_override("font_color", Color(0.98, 0.82, 0.36))

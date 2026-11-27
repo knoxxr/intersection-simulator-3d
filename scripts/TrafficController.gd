@@ -32,6 +32,7 @@ var _smart_ew_wait: int = 0
 var _emergency_approach: int = -1 # -1 = none, 0..3 = approaching ambulance
 var is_roundabout: bool = false
 var is_grade_separated_only: bool = false
+var is_overpass_mode: bool = false
 
 var lights: Array[TrafficLight] = []
 
@@ -55,22 +56,24 @@ func set_roundabout_mode(enabled: bool) -> void:
 	is_roundabout = enabled
 	visible = not (is_roundabout or is_grade_separated_only)
 
-func set_grade_separated_only(enabled: bool) -> void:
+func set_grade_separated_only(enabled: bool, overpass: bool = false) -> void:
 	is_grade_separated_only = enabled
+	is_overpass_mode = overpass
 	visible = not (is_roundabout or is_grade_separated_only)
 
-func reposition_lights(ns_half: float, ew_half: float) -> void:
+func reposition_lights(ns_half: float, ew_half: float, ns_arm_override: float = -1.0) -> void:
 	if lights.size() < 4:
 		return
 	var off_x := ns_half + 1.5
 	var off_z := ew_half + 1.5
+	var ns_reach := ns_arm_override if ns_arm_override > 0.0 else ns_half
 	lights[0].position = Vector3(-off_x, 0, off_z)
 	lights[0].rotation_degrees = Vector3(0, 0, 0)
-	lights[0].set_arm_reach(ns_half)
+	lights[0].set_arm_reach(ns_reach)
 
 	lights[1].position = Vector3(off_x, 0, -off_z)
 	lights[1].rotation_degrees = Vector3(0, 180, 0)
-	lights[1].set_arm_reach(ns_half)
+	lights[1].set_arm_reach(ns_reach)
 
 	lights[2].position = Vector3(-off_x, 0, -off_z)
 	lights[2].rotation_degrees = Vector3(0, -90, 0)
@@ -286,7 +289,7 @@ func get_phase_label() -> String:
 			return Lang.t("ph_roundabout_ems")
 		return Lang.t("ph_roundabout")
 	if is_grade_separated_only:
-		return Lang.t("ph_underpass_free")
+		return Lang.t("ph_overpass_free") if is_overpass_mode else Lang.t("ph_underpass_free")
 
 	if _emergency_approach >= 0:
 		var dir_str := Lang.t("axis_ns") if (_emergency_approach == 0 or _emergency_approach == 1) else Lang.t("axis_ew")
